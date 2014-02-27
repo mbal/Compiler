@@ -119,7 +119,6 @@ runPutDataCheck comp =
 
 magic :: Word32
 magic = 168686339
-computeStackSize x = 2
 
 putPycFile pyc = do
   writeU32 $ magic
@@ -139,7 +138,7 @@ writeCode codeObject =
   traceShow codeObject
   (do
     writeInstructions $ reverse $ (Instruction RETURN_VALUE Nothing) : (instructions codeObject)
-    writeConstants (constants codeObject) -- TODO: reverse constants?
+    writeConstants $ reverse (constants codeObject)
     writeTuple []
     writeTuple []
     writeTuple []
@@ -186,6 +185,11 @@ writeConstants cList =
 
 writeConst (PyInt a) = do
   writeU8 $ fromIntegral $ ord 'i'
-  writeU32 $ fromIntegral a
+  writeU32 $ fromIntegral a 
+  
+computeInstructionSize ilist =
+  sum $ map instructionSize ilist where 
+    instructionSize (Instruction _ Nothing) = 1
+    instructionSize (Instruction _ (Just _)) = 3
 
-computeInstructionSize ilist = 8
+computeStackSize x = 1
