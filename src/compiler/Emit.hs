@@ -86,6 +86,7 @@ encodeInstruction (Instruction opcode arg) =
         Just a ->
           let (w2, w3) = split a in [w8, w2, w3]
 
+-- Needed to avoid -XNoMonomorphismRestriction
 writeU8 :: Word8 -> ErrorT String PutM ()
 writeU8 = lift . putWord8
 writeU16 :: Word16 -> ErrorT String PutM ()

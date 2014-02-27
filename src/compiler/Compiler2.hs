@@ -76,3 +76,8 @@ compile (Sum e1 e2) = do
   compile e1
   compile e2
   emitCodeNoArg BINARY_ADD
+
+compile (FunctionCall fname exprs) = do
+  mapM compile exprs
+  emitCodeNoArg PRINT_EXPR
+  emitCodeArg LOAD_CONST 0
