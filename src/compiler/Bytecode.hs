@@ -40,8 +40,10 @@ data OpCode
    | GET_ITER -- 68
    | STORE_LOCALS -- 69
    | PRINT_EXPR -- 70
-   | LOAD_BUILD_CLASS -- 71
-   | YIELD_FROM -- 72
+   | PRINT_ITEM -- 71
+   | PRINT_NEWLINE -- 72
+   -- | LOAD_BUILD_CLASS -- 71
+   -- | YIELD_FROM -- 72
    | INPLACE_LSHIFT -- 75
    | INPLACE_RSHIFT -- 76
    | INPLACE_AND -- 77
@@ -155,8 +157,10 @@ opcodeList = [
    (GET_ITER, 68),
    (STORE_LOCALS, 69),
    (PRINT_EXPR, 70),
-   (LOAD_BUILD_CLASS, 71),
-   (YIELD_FROM, 72),
+   (PRINT_ITEM, 71),
+   (PRINT_NEWLINE, 72),
+   -- (LOAD_BUILD_CLASS, 71), Py3k
+   -- (YIELD_FROM, 72), Py3k
    (INPLACE_LSHIFT, 75),
    (INPLACE_RSHIFT, 76),
    (INPLACE_AND, 77),
@@ -233,3 +237,5 @@ split :: Word16 -> (Word8, Word8)
 split w16 = (w2, w3)
             where w2 = fromIntegral (w16 .&. 255)
                   w3 = fromIntegral (w16 `shiftR` 8)
+
+

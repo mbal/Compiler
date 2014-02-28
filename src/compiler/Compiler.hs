@@ -66,12 +66,7 @@ data PyType = PyInt { intvalue :: Integer }
             | PyCode
             deriving (Show, Ord, Eq)
 
-compileTopLevel [] =
-  do s <- get
-     return s
-compileTopLevel (x:xs) =
-  do compile x
-     compileTopLevel xs 
+compileTopLevel = mapM compile
 
 compile (BinaryOp op e1 e2) =
   do compile e1
@@ -89,5 +84,5 @@ compile (Const a) = do
 
 compile (FunApp fname args) = do
   mapM compile args
-  emitCodeNoArg PRINT_EXPR
+  emitCodeNoArg PRINT_ITEM
   emitCodeArg LOAD_CONST 0
