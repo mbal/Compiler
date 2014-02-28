@@ -8,6 +8,6 @@ import Parser
 main = Emit.writeFile
        (execState 
            (runCompilerState $ compileTopLevel $ parseAST
-            "print(4+4); print(4);")
+            "print(4+4/2*2);")
            initState)
        "c:\\users\\utente\\desktop\\out.pyc"
