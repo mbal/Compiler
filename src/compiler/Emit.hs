@@ -12,7 +12,7 @@ import System.IO
 import Data.Binary.Put
 import qualified Data.Map as Map hiding (map)
 
-import Compiler2
+import Compiler
 import Parser
 import Bytecode
 

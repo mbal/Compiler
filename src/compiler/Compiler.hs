@@ -1,9 +1,9 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, NoMonomorphismRestriction #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving #-}
 
 module Compiler where
 import Control.Monad.Reader
 import Control.Monad.State
-import Control.Applicative hiding ((<|>), many)
+import Control.Applicative (Applicative)
 import qualified Data.ByteString.Lazy as B
    (ByteString, hGetContents, unpack, hPutStr, length)
 import Control.Monad.Error (ErrorT (..), lift, replicateM)
@@ -15,8 +15,6 @@ import Data.Char
 import Parser
 import Bytecode
 import qualified Data.Map as Map hiding (map)
-
-type PutData = ErrorT String PutM ()
 
 data CState = CState {
                 constantId :: Word16
@@ -36,8 +34,6 @@ data Instruction = Instruction OpCode (Maybe Word16)
 
 newtype CompilerState a = CompilerState { runCompilerState :: State CState a }
     deriving (Functor, Applicative, Monad, MonadState CState)
-
-test = putStrLn $ unlines $ map show $ reverse $ instructions $ execState (runCompilerState $ compile $ parseAST "5+3") initState
 
 -- emits opCode with the given argument
 emitCodeArg :: OpCode -> Word16 -> CompilerState ()
@@ -64,108 +60,34 @@ createConstant obj = do
   modify $ \s -> s { constants = obj : oldConstants }
   return cId
 
-data PyType = PyInt Integer
-            | PyTuple [PyType]
-            deriving (Show)
+data PyType = PyInt { intvalue :: Integer }
+            | PyString { string :: String }
+            | PyTuple { elements :: [PyType] }
+            | PyCode
+            deriving (Show, Ord, Eq)
 
-compile (Num a) = do
-  cId <- createConstant (PyInt a)
+compileTopLevel [] =
+  do s <- get
+     return s
+compileTopLevel (x:xs) =
+  do compile x
+     compileTopLevel xs 
+
+compile (BinaryOp op e1 e2) =
+  do compile e1
+     compile e2
+     emitCodeNoArg $ emitOp op
+     where emitOp Add = BINARY_ADD
+           emitOp Subtract = BINARY_SUBTRACT
+           emitOp Multiply = BINARY_MULTIPLY
+           emitOp Divide = BINARY_TRUE_DIVIDE
+           emitOp _ = error "compile BinaryOp: not valid"
+
+compile (Const a) = do
+  cId <- createConstant (PyInt { intvalue = a })
   emitCodeArg LOAD_CONST cId
 
-compile (Sum e1 e2) = do
-  compile e1
-  compile e2
-  emitCodeNoArg BINARY_ADD
-
-encodeInstruction :: Instruction -> [Word8]
-encodeInstruction (Instruction opcode arg) =
-  case Map.lookup opcode opcodeToWord8 of
-    Nothing -> error ("INVALID OPCODE: " ++ show opcode)
-    Just w8 ->
-      case arg of
-        Nothing -> [w8]
-        Just a ->
-          let (w2, w3) = split a in [w8, w2, w3]
-
-writeU8 = lift . putWord8
-writeU16 = lift . putWord16be
-writeU32 = lift . putWord32le
-
-writeToFile handle pyc = do
-  bytes <- runPutDataCheck $ putPycFile pyc
-  return bytes
-  B.hPutStr handle bytes
-
-writeFile pyc path = do
-  handle <- openFile path WriteMode
-  writeToFile handle pyc
-  hClose handle
-
-runPutData :: PutData -> Either String B.ByteString
-runPutData comp =
-   case runPutM (runErrorT comp) of
-      (Left err, _) -> Left err
-      (Right (), bs) -> Right bs
-
-runPutDataCheck :: PutData -> IO B.ByteString
-runPutDataCheck comp =
-   case runPutData comp of
-      Left e -> fail e
-      Right bs -> return bs
-
-magic :: Word32
-magic = 168686339
-
-putPycFile pyc = do
-  writeU32 $ magic
-  writeU32 $ (0 :: Word32) -- modified time
-  writePreamble
-  writeCode pyc
-
-writePreamble = do
-  writeU8 $ fromIntegral $ ord 'c'
-  writeU32 0
-  writeU32 0
-  writeU32 2
-  writeU32 64
-
-writeCode pyc =
-  traceShow (map encodeInstruction (reverse (instructions pyc)))
-  (do
-  writeU8 $ fromIntegral $ ord 's' -- source Code
-  writeU32 $ byteCount $ instructions pyc
-  (mapM_ writeU8 (concat (map encodeInstruction (reverse (instructions pyc)))))
-  writeConstants (constants pyc)
-  writeLocals []
-  writeLocals []
-  writeLocals []
-  writeLocals ["p.py", "<module>"])
-
-writeTuple content = do
-  writeU8 $ encodeType PyTuple
-  writeU32 $ fromIntegral $ length content
-  mapM_ writeContent content
-
-writeLocals l = do
-  writeU8 $ fromIntegral $ ord '('
-  writeU32 $ fromIntegral $ length l
-  mapM_ writeContent l
-
-writeContent x = do
-  writeU8 $ fromIntegral $ ord 's'
-  writeU32 $ fromIntegral $ length x
-  mapM_ writeU8 (map (fromIntegral . ord) x)
-
-writeConstants cList =
-  traceShow cList
-  (do
-  writeU8 $ fromIntegral $ ord '('
-  writeU32 $ fromIntegral $ length cList
-  mapM_ writeConst cList)
-
-writeConst (PyInt a) = do
-  writeU8 $ fromIntegral $ ord 'i'
-  writeU32 $ fromIntegral a
-
-byteCount :: [Instruction] -> Word32
-byteCount x = 7
+compile (FunApp fname args) = do
+  mapM compile args
+  emitCodeNoArg PRINT_EXPR
+  emitCodeArg LOAD_CONST 0
