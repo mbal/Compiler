@@ -14,6 +14,7 @@ import qualified Data.Map as Map hiding (map)
 
 import Compiler
 import Parser
+import StackSize
 import Bytecode
 
 type PutData = ErrorT String PutM ()
@@ -126,27 +127,26 @@ putPycFile pyc = do
   writePreamble pyc
   writeCode pyc
 
-writePreamble pyc = do
-  writeU8 $ fromIntegral $ ord 'c'
-  writeU32 0
-  writeU32 0
-  writeU32 $ computeStackSize pyc -- stacksize
-  writeU32 64 --options 
+writePreamble pyc =
+  do writeU8 $ fromIntegral $ ord 'c'
+     writeU32 0
+     writeU32 0
+     writeU32 $ fromIntegral $ computeStackSize (instructions pyc) -- stacksize
+     writeU32 64 --options
 
 
 writeCode codeObject =
-  traceShow codeObject
-  (do
+  do
     writeInstructions $ reverse $ (Instruction RETURN_VALUE Nothing) : (instructions codeObject)
     writeConstants $ reverse (constants codeObject)
-    writeTuple []
+    writeTuple $ reverse (variables codeObject)
     writeTuple []
     writeTuple []
     writeTuple []
     writeString PyString { string = "code" }
     writeString PyString { string = "<module>" }
     writeU32 1 -- first line of code ??
-    writeString PyString { string = "aa" }) -- lnotab ??
+    writeString PyString { string = "aa" } -- lnotab ??
 
 writeInstructions ilist = do
   writeU8 $ encodeType STRING
@@ -177,14 +177,13 @@ writeContent x = do
   mapM_ writeU8 (map (fromIntegral . ord) x)
 
 writeConstants cList =
-  traceShow cList
-  (do
-  writeU8 $ fromIntegral $ ord '('
-  writeU32 $ fromIntegral $ length cList
-  mapM_ writeConst cList)
+  do
+    writeU8 $ fromIntegral $ ord '('
+    writeU32 $ fromIntegral $ length cList
+    mapM_ writeConst cList
 
 writeConst (PyInt a) = do
-  writeU8 $ fromIntegral $ ord 'i'
+  writeU8 $ encodeType INT
   writeU32 $ fromIntegral a 
   
 computeInstructionSize ilist =
@@ -192,4 +191,4 @@ computeInstructionSize ilist =
     instructionSize (Instruction _ Nothing) = 1
     instructionSize (Instruction _ (Just _)) = 3
 
-computeStackSize x = 1
+
