@@ -16,16 +16,24 @@ import Parser
 import Bytecode
 import qualified Data.Map as Map hiding (map)
 
+{-- ============= STATE ============= --}
 data CState = CState {
-                constantId :: Word16
-                , variableId :: Word16
+                nextConstantId :: Word16
+                , nextVariableId :: Word16
                 , constants :: [PyType]
+                , varNames :: Map.Map Name Word16
                 , variables :: [String]
-                , varLabels :: Map.Map String Integer
                 , instructions :: [Instruction]
                 } deriving (Show)
 
-initState = CState 0 0 [] [] Map.empty []
+initState = CState {
+  nextConstantId =  0
+  , nextVariableId = 0
+  , constants = []
+  , varNames = Map.empty
+  , variables = []
+  , instructions = []
+  }
 
 {- An instruction in the Python Bytecode is:
   * 1 Opcode (1 byte)
@@ -51,14 +59,9 @@ emitCode inst = do
 
 freshConstantId :: CompilerState Word16
 freshConstantId = do
-  cId <- gets constantId
-  modify $ \s -> s { constantId = cId + 1 }
+  cId <- gets nextConstantId
+  modify $ \s -> s { nextConstantId = cId + 1 }
   return cId
-
-freshVariableId = do
-  vId <- gets variableId
-  modify $ \s -> s { variableId = vId + 1 }
-  return vId
 
 createConstant :: PyType -> CompilerState Word16
 createConstant obj =
@@ -72,9 +75,23 @@ getConstantId obj Nothing =
      return cId
 getConstantId _ (Just x) = do return $ fromInteger x
 
+freshVariableId :: CompilerState Word16
+freshVariableId =
+  do x <- gets nextVariableId
+     modify $ \s -> s { nextVariableId = x + 1 }
+     return x
+
 createVariable varName =
-  do s <- gets variables
-     getVariableId varName (indexOf varName (reverse s))
+  do vars <- gets varNames
+     case Map.lookup varName vars of
+       Nothing -> newVariable varName
+       Just x -> return $ x
+
+newVariable name =
+  do vId <- freshVariableId
+     vars <- gets varNames
+     modify $ \s -> s { varNames = Map.insert name vId vars }
+     return vId
 
 getVariableId name Nothing =
   do vId <- freshVariableId
@@ -83,6 +100,8 @@ getVariableId name Nothing =
      return vId
 getVariableId _ (Just x) = do return $ fromInteger x
           
+{-- ============= STATE ============= --}
+
 indexOf :: (Eq a) => a -> [a] -> Maybe Integer
 indexOf y list = indexOf' y list 0
   where indexOf' _ [] _ = Nothing
@@ -117,14 +136,15 @@ compile (Let k e) = do
   emitCodeArg STORE_NAME vId
 
 compile (Var k) = do
-  s <- gets variables
-  let vId = indexOf k (reverse s)
-  case vId of
-    Nothing -> error $ "Variable " ++ k ++ " not defined"
+  s <- gets varNames
+  case Map.lookup k s of
+    Nothing -> error $ "Variable " ++ k ++ " is not defined"
     Just x -> emitCodeArg LOAD_NAME $ fromIntegral x
 
 {-- XXX: assume that every function is a print --}
 compile (FunApp fname args) = do
   mapM compile args
-  emitCodeNoArg PRINT_ITEM -- 333: Py3k incompatibily, print is a function
+  -- 333: Py3k incompatibily, print is a function, so it should be loaded and
+  -- called like any other functions.
+  emitCodeNoArg PRINT_ITEM
   emitCodeArg LOAD_CONST 0
