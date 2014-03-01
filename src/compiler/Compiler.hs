@@ -18,12 +18,14 @@ import qualified Data.Map as Map hiding (map)
 
 data CState = CState {
                 constantId :: Word16
+                , variableId :: Word16
                 , constants :: [PyType]
+                , variables :: [String]
                 , varLabels :: Map.Map String Integer
                 , instructions :: [Instruction]
                 } deriving (Show)
 
-initState = CState 0 [] Map.empty []
+initState = CState 0 0 [] [] Map.empty []
 
 {- An instruction in the Python Bytecode is:
   * 1 Opcode (1 byte)
@@ -53,6 +55,11 @@ freshConstantId = do
   modify $ \s -> s { constantId = cId + 1 }
   return cId
 
+freshVariableId = do
+  vId <- gets variableId
+  modify $ \s -> s { variableId = vId + 1 }
+  return vId
+
 createConstant :: PyType -> CompilerState Word16
 createConstant obj =
   do s <- gets constants
@@ -65,6 +72,17 @@ getConstantId obj Nothing =
      return cId
 getConstantId _ (Just x) = do return $ fromInteger x
 
+createVariable varName =
+  do s <- gets variables
+     getVariableId varName (indexOf varName (reverse s))
+
+getVariableId name Nothing =
+  do vId <- freshVariableId
+     oldVariables <- gets variables
+     modify $ \s -> s { variables = name : oldVariables }
+     return vId
+getVariableId _ (Just x) = do return $ fromInteger x
+          
 indexOf :: (Eq a) => a -> [a] -> Maybe Integer
 indexOf y list = indexOf' y list 0
   where indexOf' _ [] _ = Nothing
@@ -93,7 +111,20 @@ compile (Const a) = do
   cId <- createConstant (PyInt { intvalue = a })
   emitCodeArg LOAD_CONST cId
 
+compile (Let k e) = do
+  compile e
+  vId <- createVariable k
+  emitCodeArg STORE_NAME vId
+
+compile (Var k) = do
+  s <- gets variables
+  let vId = indexOf k (reverse s)
+  case vId of
+    Nothing -> error $ "Variable " ++ k ++ " not defined"
+    Just x -> emitCodeArg LOAD_NAME $ fromIntegral x
+
+{-- XXX: assume that every function is a print --}
 compile (FunApp fname args) = do
   mapM compile args
-  emitCodeNoArg PRINT_ITEM
+  emitCodeNoArg PRINT_ITEM -- 333: Py3k incompatibily, print is a function
   emitCodeArg LOAD_CONST 0
