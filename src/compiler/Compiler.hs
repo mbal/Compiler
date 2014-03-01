@@ -54,11 +54,22 @@ freshConstantId = do
   return cId
 
 createConstant :: PyType -> CompilerState Word16
-createConstant obj = do
-  cId <- freshConstantId
-  oldConstants <- gets constants
-  modify $ \s -> s { constants = obj : oldConstants }
-  return cId
+createConstant obj =
+  do s <- gets constants
+     getConstantId obj (indexOf obj (reverse s))
+
+getConstantId obj Nothing =
+  do cId <- freshConstantId
+     oldConstants <- gets constants
+     modify $ \s -> s { constants = obj : oldConstants }
+     return cId
+getConstantId _ (Just x) = do return $ fromInteger x
+
+indexOf :: (Eq a) => a -> [a] -> Maybe Integer
+indexOf y list = indexOf' y list 0
+  where indexOf' _ [] _ = Nothing
+        indexOf' y (x:xs) a = if x == y then (Just a) else indexOf' y xs (a+1)
+
 
 data PyType = PyInt { intvalue :: Integer }
             | PyString { string :: String }
