@@ -1,5 +1,4 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving #-}
-
+{-# LANGUAGE GeneralizedNewtypeDeriving, RecordWildCards, MultiParamTypeClasses #-}
 module Compiler where
 import Control.Monad.Reader
 import Control.Monad.State
@@ -9,38 +8,42 @@ import qualified Data.ByteString.Lazy as B
 import Control.Monad.Error (ErrorT (..), lift, replicateM)
 import Data.Word (Word32, Word16, Word8)
 import System.IO
-import Data.Binary.Put
 import Debug.Trace
 import Data.Char
-import Parser
-import Bytecode
 import qualified Data.Map as Map hiding (map)
 
-{-- ============= STATE ============= --}
-data CState = CState {
-                nextConstantId :: Word16
-                , nextVariableId :: Word16
-                , constants :: [PyType]
-                , varNames :: Map.Map Name Word16
-                , variables :: [String]
-                , instructions :: [Instruction]
-                } deriving (Show)
+import Parser (Term(..), BOperation(..), Identifier)
+import Bytecode
+import Emit
+import Types
 
-initState = CState {
-  nextConstantId =  0
-  , nextVariableId = 0
-  , constants = []
-  , varNames = Map.empty
-  , variables = []
-  , instructions = []
+initBlock = CodeBlock {
+  block_instructions = []
+  , block_names = Map.empty
+  , block_constants = Map.empty
+  , block_varnames = Map.empty
+  , block_freevars = Map.empty
+  , block_cellvars = Map.empty
+  , block_name = ""
+  , nextConstantID = 0
+  , nextVariableID = 0
   }
 
-{- An instruction in the Python Bytecode is:
-  * 1 Opcode (1 byte)
-  * 1 argument, of 2 bytes
-Only instructions with opcode > 90 have an argument -}
-data Instruction = Instruction OpCode (Maybe Word16)
-                   deriving (Show)
+initState = CState {
+  cMagic = 168686339
+  , cBlock = initBlock
+  , cFilename = "out"
+  }
+
+{-newtype CompilerState a =
+  CompilerState (StateT CState IO a)
+  deriving (Monad, Functor, Applicative, MonadIO)
+
+instance MonadState CState CompilerState where
+  get = CompilerState get
+  put s = CompilerState $ put s
+
+runCompilerState (CompilerState comp) = evalStateT comp -}
 
 newtype CompilerState a = CompilerState { runCompilerState :: State CState a }
     deriving (Functor, Applicative, Monad, MonadState CState)
@@ -54,52 +57,58 @@ emitCodeNoArg opCode = emitCode $ Instruction opCode Nothing
 
 emitCode :: Instruction -> CompilerState ()
 emitCode inst = do
-  oldInstructions <- gets instructions
-  modify $ \s -> s { instructions = inst : oldInstructions }
+  oldInstructions <- getBlockState block_instructions
+  modifyBlockState $ \s -> s { block_instructions = inst : oldInstructions }
 
 freshConstantId :: CompilerState Word16
 freshConstantId = do
-  cId <- gets nextConstantId
-  modify $ \s -> s { nextConstantId = cId + 1 }
+  cId <- getBlockState nextConstantID
+  modifyBlockState $ \s -> s { nextConstantID = cId + 1 }
   return cId
 
-createConstant :: PyType -> CompilerState Word16
-createConstant obj =
-  do s <- gets constants
-     getConstantId obj (indexOf obj (reverse s))
+modifyBlockState :: (CodeBlock -> CodeBlock) -> CompilerState ()
+modifyBlockState f = do
+  state <- getBlockState id
+  setBlockState $ f state
 
-getConstantId obj Nothing =
+getBlockState f = gets (f . cBlock)
+setBlockState newState = do
+  oldState <- get
+  put $ oldState { cBlock = newState }
+
+createConstant :: PyType -> CompilerState Word16
+createConstant c@(PyCode {..}) =
+  newConstant c
+createConstant obj =
+  (do s <- getBlockState block_constants
+      case Map.lookup obj s of
+        Nothing -> newConstant obj
+        Just x -> return x)
+
+newConstant name =
   do cId <- freshConstantId
-     oldConstants <- gets constants
-     modify $ \s -> s { constants = obj : oldConstants }
+     constants <- getBlockState block_constants
+     modifyBlockState $ \s -> s { block_constants = Map.insert name cId constants }
      return cId
-getConstantId _ (Just x) = do return $ fromInteger x
 
 freshVariableId :: CompilerState Word16
 freshVariableId =
-  do x <- gets nextVariableId
-     modify $ \s -> s { nextVariableId = x + 1 }
+  do x <- getBlockState nextVariableID
+     modifyBlockState $ \s -> s { nextVariableID = x + 1 }
      return x
 
 createVariable varName =
-  do vars <- gets varNames
+  do vars <- getBlockState block_names
      case Map.lookup varName vars of
        Nothing -> newVariable varName
        Just x -> return $ x
 
 newVariable name =
   do vId <- freshVariableId
-     vars <- gets varNames
-     modify $ \s -> s { varNames = Map.insert name vId vars }
+     vars <- getBlockState block_names
+     modifyBlockState $ \s -> s { block_names = Map.insert name vId vars }
      return vId
 
-getVariableId name Nothing =
-  do vId <- freshVariableId
-     oldVariables <- gets variables
-     modify $ \s -> s { variables = name : oldVariables }
-     return vId
-getVariableId _ (Just x) = do return $ fromInteger x
-          
 {-- ============= STATE ============= --}
 
 indexOf :: (Eq a) => a -> [a] -> Maybe Integer
@@ -108,13 +117,14 @@ indexOf y list = indexOf' y list 0
         indexOf' y (x:xs) a = if x == y then (Just a) else indexOf' y xs (a+1)
 
 
-data PyType = PyInt { intvalue :: Integer }
-            | PyString { string :: String }
-            | PyTuple { elements :: [PyType] }
-            | PyCode
-            deriving (Show, Ord, Eq)
+compileTopLevel xs =
+  do mapM compile xs
+     returnNone
 
-compileTopLevel = mapM compile
+returnNone =
+  do noneId <- createConstant PyNone
+     emitCodeArg LOAD_CONST noneId
+     emitCodeNoArg RETURN_VALUE
 
 compile (BinaryOp op e1 e2) =
   do compile e1
@@ -136,15 +146,90 @@ compile (Let k e) = do
   emitCodeArg STORE_NAME vId
 
 compile (Var k) = do
-  s <- gets varNames
-  case Map.lookup k s of
-    Nothing -> error $ "Variable " ++ k ++ " is not defined"
-    Just x -> emitCodeArg LOAD_NAME $ fromIntegral x
+  s <- getBlockState block_names
+  res <- searchVariable k
+  case res of
+    Just (typ, x) -> emitReadVar typ x
+    Nothing -> error "Unknown variable"
 
-{-- XXX: assume that every function is a print --}
-compile (FunApp fname args) = do
+-- 333: Py3k incompatibily, print is a function, so it should be loaded and
+-- called like any other functions.
+compile (FunApp "print" args) = do
   mapM compile args
-  -- 333: Py3k incompatibily, print is a function, so it should be loaded and
-  -- called like any other functions.
   emitCodeNoArg PRINT_ITEM
-  emitCodeArg LOAD_CONST 0
+
+compile (FunApp fname args) = do
+  s <- getBlockState block_names
+  case Map.lookup fname s of
+    Nothing -> error $ "No such function: " ++ fname
+    Just x -> do emitCodeArg LOAD_NAME x
+                 mapM compile args
+                 emitCodeArg CALL_FUNCTION (fromIntegral (length args)) -- XXX: 0 if no *args, **kwargs
+
+compile (Defun fname fargs body) = do
+  oldState <- getBlockState id
+  modify $ \s -> s { cBlock = initBlock }
+  modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction fargs }
+  compile body
+  emitCodeNoArg RETURN_VALUE
+  compiledBody <- makeObject fargs
+  modify $ \s -> s { cBlock = oldState }
+  compileClosure (PyString { string=fname }) compiledBody fargs
+  vId <- createVariable fname
+  emitCodeArg STORE_NAME vId
+
+--makeObject :: CompilerState PyType
+makeObject fargs = do
+  instr <- getBlockState block_instructions
+  cnst <- getBlockState block_constants
+  locals <- getBlockState block_varnames
+  vnames <- getBlockState block_names
+  let obj = PyCode {
+                   argcount = fromIntegral (length fargs)
+                   , nlocals = fromIntegral (length $ Map.toList locals)
+                   , stackSize = 100
+                   , flags = 0x43
+                   , code = PyString $ (map (chr . fromIntegral) (concat (reverse (map encodeInstruction instr))))
+                   , consts = PyTuple $ Map.keys cnst
+                   , varnames = PyTuple $ map PyString (Map.keys locals)
+                   , names = PyTuple $ map PyString (Map.keys vnames)
+                   }
+  return obj
+  where
+    makeConstants = Map.keys
+    makeNames = Map.elems
+
+emitWriteVar fname = do
+  cId <- createConstant fname
+  emitCodeArg STORE_NAME cId
+
+compileClosure :: PyType -> PyType -> [Identifier] -> CompilerState ()
+compileClosure name cbody args =
+  do compileConstantEmit cbody
+     emitCodeArg MAKE_FUNCTION 0
+
+compileConstantEmit obj =
+  do constantId <- createConstant obj
+     emitCodeArg LOAD_CONST constantId
+
+computeLocalsForFunction :: [Identifier] -> Map.Map Identifier Word16
+computeLocalsForFunction formalParameters =
+  Map.fromList (zip formalParameters [0.. ])
+
+emitReadVar typ index =
+  case typ of
+    Name -> emitCodeArg LOAD_NAME index
+    Global -> emitCodeArg LOAD_GLOBAL index
+    Fast -> emitCodeArg LOAD_FAST index
+    Deref -> emitCodeArg LOAD_DEREF index
+
+searchVariable :: Identifier -> CompilerState (Maybe (VarType, Word16))
+searchVariable varName = do
+  whr <- getBlockState block_varnames
+  case Map.lookup varName whr of
+    Just x -> return $ Just (Fast, x)
+    Nothing -> do
+      globals <- getBlockState block_names
+      case Map.lookup varName globals of
+        Just y -> return $ Just (Global, y)
+        Nothing -> return Nothing

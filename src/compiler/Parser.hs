@@ -17,18 +17,18 @@ data UOperation = Minus
                 | Fix
                 deriving (Show, Eq)
 
-data Term = Var Name -- variable definition
-          | Lambda Name Term -- function
-          | FunApp Term [Term] -- function application
+data Term = Var Identifier -- variable definition
+          | FunApp Identifier [Term] -- function application
           | Const Value -- constant definition
           | Array [Term]
           | BinaryOp BOperation Term Term -- binary operation
           | UnaryOp UOperation Term -- unary operation (unary -, fix operator)
           | If Term Term Term -- if
-          | Let Name Term -- let binding
+          | Let Identifier Term -- let binding
+          | Defun Identifier [Identifier] Term
           deriving (Show, Eq)
 
-type Name = String
+type Identifier = String
 type Value = Integer -- currently, we support only integers
 
 languageDef =
@@ -77,8 +77,22 @@ seqOfExpression =
      return list
 
 expression = expr'
-expr' = letBinding <|> ifExpression <|> arithExpression <|> array
+expr' = letBinding
+        <|> functionDefinition
+        <|> ifExpression
+        <|> arithExpression
+        <|> array
 
+functionDefinition =
+  do reserved "function"
+     name <- identifier
+     parameters <- parens variables
+     reserved "="
+     body <- expression
+     return $ Defun name parameters body
+
+variables = sepBy identifier comma
+  
 ifExpression =
   do reserved "if"
      cond <- expression
@@ -104,7 +118,7 @@ funApplication =
   try (do
           fun <- identifier
           a <- parens (sepBy expression comma)
-          return $ FunApp (Var fun) a)
+          return $ FunApp fun a)
   <|> delimExpr
 
 delimExpr = parens expression
