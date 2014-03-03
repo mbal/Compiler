@@ -1,10 +1,23 @@
-# Compiler
-A language that compiles to Python's bytecode.
+# X
+A language that compiles to Python's bytecode. I don't have a name,
+yet, so, for now, let's just settle for X. The main purpose of this
+project is to have a bit of fun with a compiler: don't expect much,
+it's just for learning! X won't be the next Clojure.
+
+Much inspiration (and code) is taken from Blip, the Python compiler
+written in Haskell.
 
 ## Language
-Well, not really a language. Until now, it can only compile an expression like 1+2+3. No IO, no functions, no objects, just sums, for now.
-This language (I don't have a name yet, let's call it X) compiles to Python's bytecode.
+Well, not really a language. It's lacking many features, such as
+conditionals. Let's focus instead on what it can do:
 
-### Main Features
-* It can sum integers. A lot of integers. Just start writing a number, write a plus, write another number, and repeat, until you're tired. Then you can compile, and execute. If nothing happens, don't worry, it's correct! 
-* that's pretty much it.
+* arithmetic
+* function definition
+* function call
+* print
+
+What's coming next?
+* if
+
+
+
