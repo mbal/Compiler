@@ -3,17 +3,15 @@ a start it doesn't offer any feature that can cause hair loss, such as
 monads. To be sure, it doesn't even offer anything beside basic
 arithmetic!
 
-X borrows features from Haskell, Python and J, but:
-* J calls for a mixture of interpreting and parsing, because the
-  meaning of some sentence is fully defined only at runtime.
-* Haskell is very near to the *almost perfect* language, but there are
-  a few points I don't like. In particular, Haskell has a lot of
-  libraries, but these libraries tend to offer a specific DSL: this
-  often means that, to learn how to use a library, you have to learn a
-  new language. This language is almost always well integrated in the
-  Haskell language, but, for a newcomer to Haskell, this can be rather
-  confusing. 
-* Python gets a lot right, in my opinion. 
+X borrows features from J, Haskell (and other functional languages)
+and Python. In particular, these features are:
+* X has some operator taken from J, in a simplified form. Unluckily,
+  J's design calls for a mixture of parsing and executing (the parsing
+  rules are influenced by some previous result).
+* from Haskell (or any other functional language): functions as first
+  class and no distinction between statement and expression
+* from Python we get all the scoping rules (as a consequence of the
+  choice of runtime).
 
 # Notes
 * Currently the code is not really organized.
@@ -58,12 +56,3 @@ bytes (1 byte for the instruction, 2 bytes for the index of the
 constant).
 The names of the variables are saved in another area, and even these
 are referred to by their index.
-
-## Known bugs
-* Some code makes Python segfault. I don't have tracked the
-  motivation, yet. It's probably the stack size, that is wrong.
-  `print(4+4/3*3)` doesn't work (when the stack size is set to 2). It's
-  a bit strange, though, since it crashes after all the computations,
-  while it **should** crash when pushing the first 3 on the stack...
-  Yes, it's the stack size. After reading the CPython source code I
-  have a rough idea about how to compute it.

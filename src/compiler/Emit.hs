@@ -78,6 +78,9 @@ encodeObjectType objectType =
       Nothing -> error $ "bad object type: " ++ show objectType
       Just chr -> fromIntegral $ ord chr 
 
+encodeInstruction' (AugInstruction i k) =
+  encodeInstruction i
+
 encodeInstruction :: Instruction -> [Word8]
 encodeInstruction (Instruction opcode arg) =
   case Map.lookup opcode opcodeToWord8 of
@@ -140,7 +143,7 @@ keysOrdered mp = map fst (sortBy (comparing snd) (Map.toList mp))
 
 writeCode codeObject =
   do
-    writeInstructions $ reverse $ (block_instructions codeObject)
+    writeInstructions $ map instr (block_instructions codeObject)
     writeConstants $ keysOrdered (block_constants codeObject)
     writeTuple $ map PyString (keysOrdered (block_names codeObject))
     writeTuple $ map PyString (keysOrdered (block_varnames codeObject))
@@ -229,10 +232,11 @@ writeConst (PyCode {..}) = do
                      PyTuple [], PyString "fname", PyString "function"]
   writeU32 1
   writeString $ PyString { string = "a" }
+
+instructionSize (Instruction _ Nothing) = 1
+instructionSize (Instruction _ (Just _)) = 3
     
-computeInstructionSize ilist =
-  sum $ map instructionSize ilist where 
-    instructionSize (Instruction _ Nothing) = 1
-    instructionSize (Instruction _ (Just _)) = 3
+computeInstructionSize :: [Instruction] -> Word32
+computeInstructionSize ilist = sum $ map instructionSize ilist
 
 

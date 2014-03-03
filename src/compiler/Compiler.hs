@@ -12,7 +12,7 @@ import Debug.Trace
 import Data.Char
 import qualified Data.Map as Map hiding (map)
 
-import Parser (Term(..), BOperation(..), Identifier)
+import Parser (Term(..), BOperation(..), UOperation(..), Identifier)
 import Bytecode
 import Emit
 import Types
@@ -25,8 +25,12 @@ initBlock = CodeBlock {
   , block_freevars = Map.empty
   , block_cellvars = Map.empty
   , block_name = ""
-  , nextConstantID = 0
-  , nextVariableID = 0
+  , block_labelMap = Map.empty
+  , block_instructionOffset = 0
+  , block_labelsForNextInstruction = []
+  , block_nextLabelID = 0
+  , block_nextConstantID = 0
+  , block_nextVariableID = 0
   }
 
 initState = CState {
@@ -34,16 +38,6 @@ initState = CState {
   , cBlock = initBlock
   , cFilename = "out"
   }
-
-{-newtype CompilerState a =
-  CompilerState (StateT CState IO a)
-  deriving (Monad, Functor, Applicative, MonadIO)
-
-instance MonadState CState CompilerState where
-  get = CompilerState get
-  put s = CompilerState $ put s
-
-runCompilerState (CompilerState comp) = evalStateT comp -}
 
 newtype CompilerState a = CompilerState { runCompilerState :: State CState a }
     deriving (Functor, Applicative, Monad, MonadState CState)
@@ -57,13 +51,26 @@ emitCodeNoArg opCode = emitCode $ Instruction opCode Nothing
 
 emitCode :: Instruction -> CompilerState ()
 emitCode inst = do
+  labels <- getBlockState block_labelsForNextInstruction
+  offset <- getBlockState block_instructionOffset
+  labelMap <- getBlockState block_labelMap
+  modifyBlockState $ \s -> s { block_labelsForNextInstruction = [] }
+  forM_ labels (\x -> updateLabelMap x offset)
   oldInstructions <- getBlockState block_instructions
-  modifyBlockState $ \s -> s { block_instructions = inst : oldInstructions }
+  let annotatedInstruction = AugInstruction inst offset
+  modifyBlockState $
+    \s -> s { block_instructions = annotatedInstruction : oldInstructions
+            , block_instructionOffset = offset + (instructionSize inst) }
+
+updateLabelMap label index = do
+   oldLabelMap <- getBlockState block_labelMap
+   let newLabelMap = Map.insert label index oldLabelMap
+   modifyBlockState $ \s -> s { block_labelMap = newLabelMap }
 
 freshConstantId :: CompilerState Word16
 freshConstantId = do
-  cId <- getBlockState nextConstantID
-  modifyBlockState $ \s -> s { nextConstantID = cId + 1 }
+  cId <- getBlockState block_nextConstantID
+  modifyBlockState $ \s -> s { block_nextConstantID = cId + 1 }
   return cId
 
 modifyBlockState :: (CodeBlock -> CodeBlock) -> CompilerState ()
@@ -75,6 +82,16 @@ getBlockState f = gets (f . cBlock)
 setBlockState newState = do
   oldState <- get
   put $ oldState { cBlock = newState }
+
+newLabel :: CompilerState LabelID
+newLabel = do
+  lId <- getBlockState block_nextLabelID
+  modifyBlockState $ \s -> s { block_nextLabelID = lId + 1 }
+  return lId
+
+assignLabel lblId = do
+  oldLbl <- getBlockState block_labelsForNextInstruction
+  modifyBlockState $ \s -> s { block_labelsForNextInstruction = lblId : oldLbl }
 
 createConstant :: PyType -> CompilerState Word16
 createConstant c@(PyCode {..}) =
@@ -93,8 +110,8 @@ newConstant name =
 
 freshVariableId :: CompilerState Word16
 freshVariableId =
-  do x <- getBlockState nextVariableID
-     modifyBlockState $ \s -> s { nextVariableID = x + 1 }
+  do x <- getBlockState block_nextVariableID
+     modifyBlockState $ \s -> s { block_nextVariableID = x + 1 }
      return x
 
 createVariable varName =
@@ -111,21 +128,74 @@ newVariable name =
 
 {-- ============= STATE ============= --}
 
-indexOf :: (Eq a) => a -> [a] -> Maybe Integer
-indexOf y list = indexOf' y list 0
-  where indexOf' _ [] _ = Nothing
-        indexOf' y (x:xs) a = if x == y then (Just a) else indexOf' y xs (a+1)
+-- main purpose of this function is to fix jump targets
+assemble = do
+  lblMap <- getBlockState block_labelMap
+  code <- fmap reverse (getBlockState block_instructions)
+  let annotatedCode = fixJumpTarget lblMap code
+  modifyBlockState $ \s -> s { block_instructions = annotatedCode }
 
+fixJumpTarget :: Map.Map LabelID Word16 -> [AugInstruction] -> [AugInstruction]
+fixJumpTarget labelMap code =
+  -- walk over the code, if an instruction is a jump, look it up in the
+  -- label map, compute the offset (if relative) and fix the target
+  map (\x -> fixJump labelMap x) code
+
+fixJump mp instr@(AugInstruction (Instruction opcode arg) index) =
+  if isJump opcode then
+    case arg of
+      Just x ->
+        let index = Map.lookup x mp in
+        case index of
+          Just k -> newBytecode k instr
+          Nothing -> error "shouldn't happen"
+      Nothing -> error $ "shouldn't happen"
+  else instr
+
+newBytecode target (AugInstruction (Instruction opcode (Just arg)) index) =
+  if isRelativeJump opcode then
+    AugInstruction (Instruction opcode (Just t)) index
+  else
+    AugInstruction (Instruction opcode (Just target)) index
+  where t = (target - (index + 3))
+
+isJump :: OpCode -> Bool
+isJump x = isRelativeJump x || isAbsoluteJump x
+
+isRelativeJump :: OpCode -> Bool
+isRelativeJump JUMP_FORWARD = True
+isRelativeJump SETUP_LOOP = True
+isRelativeJump FOR_ITER = True
+isRelativeJump SETUP_FINALLY = True
+isRelativeJump SETUP_EXCEPT = True
+isRelativeJump SETUP_WITH = True
+isRelativeJump _ = False
+
+isAbsoluteJump :: OpCode -> Bool
+isAbsoluteJump POP_JUMP_IF_FALSE = True
+isAbsoluteJump POP_JUMP_IF_TRUE = True
+isAbsoluteJump JUMP_ABSOLUTE = True
+isAbsoluteJump CONTINUE_LOOP = True
+isAbsoluteJump JUMP_IF_FALSE_OR_POP = True
+isAbsoluteJump JUMP_IF_TRUE_OR_POP = True
+isAbsoluteJump _ = False
 
 compileTopLevel xs =
   do mapM compile xs
      returnNone
+     assemble
 
 returnNone =
   do noneId <- createConstant PyNone
      emitCodeArg LOAD_CONST noneId
      emitCodeNoArg RETURN_VALUE
 
+compile (UnaryOp Minus e) =
+  case e of
+    Const k -> compile (Const (-k))
+    _ -> do compile e
+            emitCodeNoArg UNARY_NEGATIVE
+     
 compile (BinaryOp op e1 e2) =
   do compile e1
      compile e2
@@ -150,15 +220,25 @@ compile (Var k) = do
   res <- searchVariable k
   case res of
     Just (typ, x) -> emitReadVar typ x
-    Nothing -> error "Unknown variable"
+    Nothing -> error $ "Unknown variable " ++ (show k)
+compile (If cond thn els) = do
+  compile cond
+  flsLabel <- newLabel
+  endLabel <- newLabel
+  emitCodeArg POP_JUMP_IF_FALSE flsLabel
+  compile thn
+  emitCodeArg JUMP_FORWARD endLabel
+  assignLabel flsLabel
+  compile els
+  assignLabel endLabel
 
 -- 333: Py3k incompatibily, print is a function, so it should be loaded and
 -- called like any other functions.
-compile (FunApp "print" args) = do
+compile (FunApp (Var "print") args) = do
   mapM compile args
   emitCodeNoArg PRINT_ITEM
 
-compile (FunApp fname args) = do
+compile (FunApp (Var fname) args) = do
   s <- getBlockState block_names
   case Map.lookup fname s of
     Nothing -> error $ "No such function: " ++ fname
@@ -189,7 +269,8 @@ makeObject fargs = do
                    , nlocals = fromIntegral (length $ Map.toList locals)
                    , stackSize = 100
                    , flags = 0x43
-                   , code = PyString $ (map (chr . fromIntegral) (concat (reverse (map encodeInstruction instr))))
+                   , code = PyString $ map (chr . fromIntegral)
+                            (concat (map encodeInstruction' (reverse instr)))
                    , consts = PyTuple $ Map.keys cnst
                    , varnames = PyTuple $ map PyString (Map.keys locals)
                    , names = PyTuple $ map PyString (Map.keys vnames)
@@ -216,6 +297,8 @@ computeLocalsForFunction :: [Identifier] -> Map.Map Identifier Word16
 computeLocalsForFunction formalParameters =
   Map.fromList (zip formalParameters [0.. ])
 
+-- XXX: that's not really true, it also depends on the context (i.e.
+-- function, class, module, ...)
 emitReadVar typ index =
   case typ of
     Name -> emitCodeArg LOAD_NAME index

@@ -14,11 +14,11 @@ data BOperation = Add
                 deriving (Show, Eq)
 
 data UOperation = Minus
-                | Fix
+                | Prime
                 deriving (Show, Eq)
 
 data Term = Var Identifier -- variable definition
-          | FunApp Identifier [Term] -- function application
+          | FunApp Term [Term] -- function application
           | Const Value -- constant definition
           | Array [Term]
           | BinaryOp BOperation Term Term -- binary operation
@@ -45,7 +45,7 @@ languageDef =
                                      , "not"
                                      , "and"
                                      , "or"]
-           , Token.reservedOpNames = [ "+", "-", "*", "/", "=", "@"
+           , Token.reservedOpNames = [ "+", "-", "'", "*", "/", "=", "@"
                                      , "and", "or", "not" ]
            }
 
@@ -68,7 +68,6 @@ comma = Token.comma lexer
 array =
   do c <- brackets (sepBy expression comma) -- parses an array
      return $ Array c
-
 
 parser = seqOfExpression <* eof
 
@@ -109,14 +108,8 @@ letBinding =
      value <- expression
      return $ Let name value
 
-term = parens expression
-     <|> liftM Var identifier
-     <|> liftM Const integer
-     <|> array
-
 funApplication =
-  try (do
-          fun <- identifier
+  try (do fun <- delimExpr
           a <- parens (sepBy expression comma)
           return $ FunApp fun a)
   <|> delimExpr
@@ -128,7 +121,8 @@ delimExpr = parens expression
 
 arithExpression = buildExpressionParser aOperators funApplication
 
-aOperators = [ [Prefix (reservedOp "-" >> return (UnaryOp Minus)) ]
+aOperators = [ [Prefix (reservedOp "-" >> return (UnaryOp Minus))]
+             , [Postfix (reservedOp "'" >> return (UnaryOp Prime))]
              , [Infix (reservedOp "@" >> return (BinaryOp At)) AssocLeft]
              , [Infix (reservedOp "*" >> return (BinaryOp Multiply)) AssocLeft]
              , [Infix (reservedOp "/" >> return (BinaryOp Divide)) AssocLeft]

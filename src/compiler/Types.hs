@@ -12,6 +12,10 @@ Only instructions with opcode > 90 have an argument -}
 data Instruction = Instruction OpCode (Maybe Word16)
                    deriving (Show)
 
+data AugInstruction = AugInstruction { instr :: Instruction
+                                     , index :: Word16 }
+                      deriving (Show)
+
 data PyType = PyInt { intvalue :: Integer }
             | PyString { string :: String }
             | PyTuple { elements :: [PyType] }
@@ -34,6 +38,7 @@ data PyType = PyInt { intvalue :: Integer }
 
 type ConstantID = Word16
 type VariableID = Word16
+type LabelID = Word16
 type VarSet = Set.Set Identifier
 
 emptyVarSet = Set.empty
@@ -47,13 +52,17 @@ data CState = CState {
 data VarType = Global | Fast | Deref | Name
 
 data CodeBlock = CodeBlock {
-  block_instructions :: [Instruction]
+  block_instructions :: [AugInstruction]
   , block_constants :: Map.Map PyType Word16
   , block_names :: Map.Map Identifier Word16 -- globals
   , block_varnames :: Map.Map Identifier Word16 -- python's locals
   , block_freevars :: Map.Map Identifier Word16 -- unused for now
   , block_cellvars :: Map.Map Identifier Word16 -- "" ""
   , block_name :: String -- name of the block (i.e. name of the function)
-  , nextConstantID :: ConstantID
-  , nextVariableID :: VariableID
+  , block_labelMap ::  Map.Map LabelID Word16
+  , block_instructionOffset :: Word16
+  , block_labelsForNextInstruction :: [LabelID]
+  , block_nextLabelID :: LabelID
+  , block_nextConstantID :: ConstantID
+  , block_nextVariableID :: VariableID
   } deriving (Show)
