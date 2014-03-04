@@ -97,16 +97,17 @@ createConstant :: PyType -> CompilerState Word16
 createConstant c@(PyCode {..}) =
   newConstant c
 createConstant obj =
-  (do s <- getBlockState block_constants
-      case Map.lookup obj s of
-        Nothing -> newConstant obj
-        Just x -> return x)
+  do s <- getBlockState block_constants
+     case Map.lookup obj s of
+       Nothing -> newConstant obj
+       Just x -> return x
 
 newConstant name =
   do cId <- freshConstantId
      constants <- getBlockState block_constants
-     modifyBlockState $ \s -> s { block_constants = Map.insert name cId constants }
-     return cId
+     traceShow ((show name) ++ " " ++ (show cId))
+       (do (modifyBlockState $ \s -> s { block_constants = Map.insert name cId constants })
+           return cId)
 
 freshVariableId :: CompilerState Word16
 freshVariableId =
@@ -196,6 +197,17 @@ returnNone =
      emitCodeArg LOAD_CONST noneId
      emitCodeNoArg RETURN_VALUE
 
+compile (UnaryOp Prime e) = do
+  oldState <- getBlockState id
+  modify $ \s -> s { cBlock = initBlock }
+  modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction [] }
+  compile e
+  emitCodeNoArg RETURN_VALUE
+  assemble
+  compiledBody <- makeObject []
+  modify $ \s -> s { cBlock = oldState }
+  compileClosure (PyString { string="<lambda>" }) compiledBody []
+  
 compile (UnaryOp Minus e) =
   case e of
     Const k -> compile (Const (-k))
@@ -251,7 +263,12 @@ compile (FunApp (Var fname) args) = do
     Nothing -> error $ "No such function: " ++ fname
     Just x -> do emitCodeArg LOAD_NAME x
                  mapM compile args
-                 emitCodeArg CALL_FUNCTION (fromIntegral (length args)) -- XXX: 0 if no *args, **kwargs
+                 emitCodeArg CALL_FUNCTION (fromIntegral (length args))
+
+compile (FunApp term args) = do
+  compile term
+  mapM compile args
+  emitCodeArg CALL_FUNCTION (fromIntegral (length args))
 
 compile (Defun fname fargs body) = do
   oldState <- getBlockState id
@@ -259,6 +276,7 @@ compile (Defun fname fargs body) = do
   modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction fargs }
   compile body
   emitCodeNoArg RETURN_VALUE
+  assemble
   compiledBody <- makeObject fargs
   modify $ \s -> s { cBlock = oldState }
   compileClosure (PyString { string=fname }) compiledBody fargs
@@ -277,10 +295,10 @@ makeObject fargs = do
                    , stackSize = 100
                    , flags = 0x43
                    , code = PyString $ map (chr . fromIntegral)
-                            (concat (map encodeInstruction' (reverse instr)))
-                   , consts = PyTuple $ Map.keys cnst
-                   , varnames = PyTuple $ map PyString (Map.keys locals)
-                   , names = PyTuple $ map PyString (Map.keys vnames)
+                            (concat (map encodeInstruction' instr))
+                   , consts = PyTuple $ keysOrdered cnst
+                   , varnames = PyTuple $ map PyString (keysOrdered locals)
+                   , names = PyTuple $ map PyString (keysOrdered vnames)
                    }
   return obj
   where
