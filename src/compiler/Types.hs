@@ -26,9 +26,7 @@ data PyType = PyInt { intvalue :: Integer }
                        , stackSize :: Word32
                        , flags :: Word32
                          -- this shouldn't be a PyType, but a PyString,
-                         -- however, I don't know if there is a way, other
-                         -- than adding another level of indirection (which
-                         -- solves every problem)
+                         -- but I don't know if there is a way.
                        , code :: PyType 
                        , consts :: PyType
                        , varnames :: PyType
@@ -53,8 +51,10 @@ data VarType = Global | Fast | Deref | Name
 
 data CodeBlock = CodeBlock {
   block_instructions :: [AugInstruction]
-  , block_constants :: Map.Map PyType Word16
+  , block_constantsMap :: Map.Map PyType Word16
+  , block_constants :: [PyType]
   , block_names :: Map.Map Identifier Word16 -- globals
+  --, block_names :: [Identifier]
   , block_varnames :: Map.Map Identifier Word16 -- python's locals
   , block_freevars :: Map.Map Identifier Word16 -- unused for now
   , block_cellvars :: Map.Map Identifier Word16 -- "" ""

@@ -144,7 +144,7 @@ keysOrdered mp = map fst (sortBy (comparing snd) (Map.toList mp))
 writeCode codeObject =
   do
     writeInstructions $ map instr (block_instructions codeObject)
-    writeConstants $ keysOrdered (block_constants codeObject)
+    writeConstants $ reverse (block_constants codeObject)
     writeTuple $ map PyString (keysOrdered (block_names codeObject))
     writeTuple $ map PyString (keysOrdered (block_varnames codeObject))
     writeTuple $ map PyString (keysOrdered (block_freevars codeObject))

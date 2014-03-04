@@ -20,7 +20,8 @@ import Types
 initBlock = CodeBlock {
   block_instructions = []
   , block_names = Map.empty
-  , block_constants = Map.empty
+  , block_constantsMap = Map.empty
+  , block_constants = []
   , block_varnames = Map.empty
   , block_freevars = Map.empty
   , block_cellvars = Map.empty
@@ -94,20 +95,25 @@ assignLabel lblId = do
   modifyBlockState $ \s -> s { block_labelsForNextInstruction = lblId : oldLbl }
 
 createConstant :: PyType -> CompilerState Word16
-createConstant c@(PyCode {..}) =
-  newConstant c
+createConstant c@(PyCode {..}) = do
+  cId <- freshConstantId
+  consts <- getBlockState block_constants
+  modifyBlockState $ \s -> s { block_constants = c : consts }
+  return cId
+
 createConstant obj =
-  do s <- getBlockState block_constants
+  do s <- getBlockState block_constantsMap
      case Map.lookup obj s of
        Nothing -> newConstant obj
        Just x -> return x
 
 newConstant name =
   do cId <- freshConstantId
-     constants <- getBlockState block_constants
-     traceShow ((show name) ++ " " ++ (show cId))
-       (do (modifyBlockState $ \s -> s { block_constants = Map.insert name cId constants })
-           return cId)
+     cMap <- getBlockState block_constantsMap
+     consts <- getBlockState block_constants
+     modifyBlockState $ \s -> s { block_constantsMap = Map.insert name cId cMap,
+                                  block_constants = name : consts }
+     return cId
 
 freshVariableId :: CompilerState Word16
 freshVariableId =
@@ -296,7 +302,7 @@ makeObject fargs = do
                    , flags = 0x43
                    , code = PyString $ map (chr . fromIntegral)
                             (concat (map encodeInstruction' instr))
-                   , consts = PyTuple $ keysOrdered cnst
+                   , consts = PyTuple $ reverse cnst
                    , varnames = PyTuple $ map PyString (keysOrdered locals)
                    , names = PyTuple $ map PyString (keysOrdered vnames)
                    }
