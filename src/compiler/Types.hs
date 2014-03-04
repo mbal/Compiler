@@ -62,6 +62,7 @@ data CodeBlock = CodeBlock {
   , block_labelMap ::  Map.Map LabelID Word16
   , block_instructionOffset :: Word16
   , block_labelsForNextInstruction :: [LabelID]
+  , block_nextNameID :: VariableID
   , block_nextLabelID :: LabelID
   , block_nextConstantID :: ConstantID
   , block_nextVariableID :: VariableID

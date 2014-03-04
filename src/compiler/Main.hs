@@ -8,6 +8,6 @@ import Parser
 main = Emit.writeFile
        (execState 
            (runCompilerState $ compileTopLevel $ parseAST
-            "function foo() = 5*5-4*3*6; print(foo()); function bar() = 5*5-4*3*6; print(bar());")
+            "function fact(n) = if n then n * fact(n-1) else 1; print(fact(14));")
            initState)
        "c:\\users\\utente\\desktop\\out.pyc"

@@ -29,6 +29,7 @@ initBlock = CodeBlock {
   , block_labelMap = Map.empty
   , block_instructionOffset = 0
   , block_labelsForNextInstruction = []
+  , block_nextNameID = 0
   , block_nextLabelID = 0
   , block_nextConstantID = 0
   , block_nextVariableID = 0
@@ -119,6 +120,11 @@ freshVariableId :: CompilerState Word16
 freshVariableId =
   do x <- getBlockState block_nextVariableID
      modifyBlockState $ \s -> s { block_nextVariableID = x + 1 }
+     return x
+
+freshGlobalId =
+  do x <- getBlockState block_nextNameID
+     modifyBlockState $ \s -> s { block_nextNameID = x + 1 }
      return x
 
 createVariable varName =
@@ -263,13 +269,18 @@ compile (FunApp (Var "print") args) = do
   mapM compile args
   emitCodeNoArg PRINT_ITEM
 
+-- XXX: not very nice.
+-- It would be much better if searchVariable took a `context`, and
+-- optionally created variables (if the context allows for it)
 compile (FunApp (Var fname) args) = do
-  s <- getBlockState block_names
-  case Map.lookup fname s of
-    Nothing -> error $ "No such function: " ++ fname
-    Just x -> do emitCodeArg LOAD_NAME x
-                 mapM compile args
-                 emitCodeArg CALL_FUNCTION (fromIntegral (length args))
+  res <- searchVariable fname
+  (typ, x) <- case res of
+    Just (a, b) -> do return (a, b)
+    Nothing -> do gId <- createGlobalVariable fname
+                  return (Global, gId)
+  emitReadVar typ x
+  mapM compile args
+  emitCodeArg CALL_FUNCTION (fromIntegral (length args))
 
 compile (FunApp term args) = do
   compile term
@@ -347,3 +358,9 @@ searchVariable varName = do
       case Map.lookup varName globals of
         Just y -> return $ Just (Global, y)
         Nothing -> return Nothing
+
+createGlobalVariable name = do
+  gId <- freshGlobalId
+  names <- getBlockState block_names
+  modifyBlockState $ \s -> s { block_names = Map.insert name gId names }
+  return gId
