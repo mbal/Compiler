@@ -238,5 +238,3 @@ instructionSize (Instruction _ (Just _)) = 3
     
 computeInstructionSize :: [Instruction] -> Word32
 computeInstructionSize ilist = sum $ map instructionSize ilist
-
-

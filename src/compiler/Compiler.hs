@@ -128,6 +128,8 @@ newVariable name =
 
 {-- ============= STATE ============= --}
 
+
+{-- =========== ASSEMBLE ============ --}
 -- main purpose of this function is to fix jump targets
 assemble = do
   lblMap <- getBlockState block_labelMap
@@ -141,23 +143,25 @@ fixJumpTarget labelMap code =
   -- label map, compute the offset (if relative) and fix the target
   map (\x -> fixJump labelMap x) code
 
-fixJump mp instr@(AugInstruction (Instruction opcode arg) index) =
+fixJump :: Map.Map LabelID Word16 -> AugInstruction -> AugInstruction
+fixJump mp augInstr@(AugInstruction (Instruction opcode arg) index) =
   if isJump opcode then
     case arg of
       Just x ->
-        let index = Map.lookup x mp in
-        case index of
-          Just k -> newBytecode k instr
-          Nothing -> error "shouldn't happen"
+        let jmpTarget = Map.lookup x mp
+            newArg = case jmpTarget of
+              Just k -> computeTarget k index (instr augInstr)
+              Nothing -> error "shouldn't happen"
+            in augInstr { instr = (Instruction opcode (Just newArg)) }
       Nothing -> error $ "shouldn't happen"
-  else instr
+  else augInstr
 
-newBytecode target (AugInstruction (Instruction opcode (Just arg)) index) =
+computeTarget :: Word16 -> Word16 -> Instruction -> Word16
+computeTarget target instrIndex instr@(Instruction opcode _) =
   if isRelativeJump opcode then
-    AugInstruction (Instruction opcode (Just t)) index
+    fromIntegral (target - (instrIndex + (instructionSize instr)))
   else
-    AugInstruction (Instruction opcode (Just target)) index
-  where t = (target - (index + 3))
+    fromIntegral target
 
 isJump :: OpCode -> Bool
 isJump x = isRelativeJump x || isAbsoluteJump x
@@ -179,6 +183,8 @@ isAbsoluteJump CONTINUE_LOOP = True
 isAbsoluteJump JUMP_IF_FALSE_OR_POP = True
 isAbsoluteJump JUMP_IF_TRUE_OR_POP = True
 isAbsoluteJump _ = False
+
+{-- =========== ASSEMBLE ============ --}
 
 compileTopLevel xs =
   do mapM compile xs
@@ -221,6 +227,7 @@ compile (Var k) = do
   case res of
     Just (typ, x) -> emitReadVar typ x
     Nothing -> error $ "Unknown variable " ++ (show k)
+
 compile (If cond thn els) = do
   compile cond
   flsLabel <- newLabel
