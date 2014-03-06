@@ -157,10 +157,10 @@ writeCode codeObject =
 writeCodeObj obj =
   traceShow ("writing you code object " ++ (show obj))
   (do writeU8 $ encodeType CODE
-      writeU32 45
-      writeU32 96
+      writeU32 $ argcount obj
+      writeU32 $ nlocals obj
       writeU32 $ stackSize obj
-      writeU32 $ 89
+      writeU32 $ 0x43
       writeString $ code obj
       writeObject $ consts obj
       writeObject $ varnames obj
