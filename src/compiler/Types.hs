@@ -49,12 +49,22 @@ data CState = CState {
 
 data VarType = Global | Fast | Deref | Name
 
+data Function = Function { fun_numArgs :: Int
+                         , fun_isPrime :: Bool
+                         , fun_location :: Word16
+                         }
+                deriving (Ord, Show)
+
+instance Eq Function where
+  (==) f1 f2 = (fun_location f1) == (fun_location f2)
+
 data CodeBlock = CodeBlock {
   block_instructions :: [AugInstruction]
   , block_constantsMap :: Map.Map PyType Word16
   , block_constants :: [PyType]
   , block_names :: Map.Map Identifier Word16 -- globals
-  --, block_names :: [Identifier]
+  , block_functions :: Map.Map Identifier Function -- basically, other globals
+    -- but reserved for functions
   , block_varnames :: Map.Map Identifier Word16 -- python's locals
   , block_freevars :: Map.Map Identifier Word16 -- unused for now
   , block_cellvars :: Map.Map Identifier Word16 -- "" ""
