@@ -11,6 +11,7 @@ data BOperation = Add
                 | Multiply
                 | Divide
                 | At
+                | Compose  
                 | Greater
                 | Lesser
                 | Equal  
@@ -32,11 +33,13 @@ data Term = Var Identifier -- variable definition
           | Const Value -- constant definition
           | Array [Term]
           | BinaryOp BOperation Term Term -- binary operation
-          -- | ComparisonOp COperation Term Term -- comparison
           | UnaryOp UOperation Term -- unary operation (unary -, prime operator)
           | If Term Term Term -- if
           | Let Identifier Term -- let binding
           | Defun Identifier [Identifier] Term
+          | Hook Term Term  
+          | BinOp BOperation
+          | UnOp UOperation  
           deriving (Show, Eq)
 
 type Identifier = String
@@ -61,7 +64,7 @@ languageDef =
                                      , "false"
                                      , "nil"]
            , Token.reservedOpNames = [ "+", "-", "'", "*", "/", "=", "@"
-                                     , "<", ">", "<=", ">=", "=="
+                                     , "<", ">", "<=", ">=", "==", "."
                                      , "and", "or", "not" ]
            }
 
@@ -152,31 +155,27 @@ funApplication =
           return $ FunApp fun a)
   <|> delimExpr
 
-delimExpr = parens expression
+delimExpr = (try (parens hook))
+            <|> (try funCompose)
+            <|> parens expression
             <|> variable
             <|> constant
             <|> array
 
+funCompose = chainr1 opOrFun (do { (reserved "."); return $ BinaryOp Compose })
+
+hook = do
+  f1 <- funCompose
+  f2 <- funCompose
+  return (Hook f1 f2)
+
+opOrFun = variable
+          <|> ((reserved "+") >> return (BinOp Add))
+          <|> ((reserved "*") >> return (BinOp Multiply))
+
 arithExpression = buildExpressionParser aOperators funApplication
 
-{-aOperators = [ [Prefix (reservedOp "-" >> return (UnaryOp Minus))
-                , Prefix (reservedOp "+" >> return (UnaryOp Plus)) ]
-             , [Prefix (reservedOp "not" >> return (UnaryOp Minus))]
-             , [Postfix (reservedOp "'" >> return (UnaryOp Prime))]
-             , [Infix (reservedOp "@" >> return (BinaryOp At)) AssocLeft]
-             , [Infix (reservedOp "*" >> return (BinaryOp Multiply)) AssocLeft
-                , Infix (reservedOp "/" >> return (BinaryOp Divide)) AssocLeft]
-             , [Infix (reservedOp "+" >> return (BinaryOp Add)) AssocLeft,
-                Infix (reservedOp "-" >> return (BinaryOp Subtract)) AssocLeft]
-             , [Infix (reservedOp ">" >> return (BinaryOp Greater)) AssocLeft
-                , Infix (reservedOp "<" >> return (BinaryOp Lesser)) AssocNone
-                , Infix (reservedOp "<=" >> return (BinaryOp LEQ)) AssocNone
-                , Infix (reservedOp ">=" >> return (BinaryOp GEQ)) AssocNone
-                , Infix (reservedOp "==" >> return (BinaryOp Equal)) AssocNone
-                , Infix (reservedOp "!=" >> return (BinaryOp NotEqual)) AssocNone]
-              ] -}
-
-aOperators = [ [ prefix "-" (UnaryOp Minus)]
+aOperators = [ [ prefix "-" (UnaryOp Minus) ]
              , [ prefix "+" (UnaryOp Plus) ]
              , [ prefix "not" (UnaryOp Not) ]
              , [ postfix "'" (UnaryOp Prime) ]
