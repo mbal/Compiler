@@ -219,12 +219,21 @@ compile (UnaryOp Prime e) = do
   compiledBody <- makeObject []
   modify $ \s -> s { cBlock = oldState }
   compileClosure (PyString { string="<lambda>" }) compiledBody []
+
+compile (Array elements) =
+  do mapM compile elements
+     emitCodeArg BUILD_LIST (fromIntegral (length elements))
   
 compile (UnaryOp Minus e) =
   case e of
     Const k -> compile (Const (-k))
     _ -> do compile e
             emitCodeNoArg UNARY_NEGATIVE
+     
+compile (BinaryOp At e1 idx) =
+  do compile e1
+     compile idx
+     emitCodeNoArg BINARY_SUBSCR
      
 compile (BinaryOp op e1 e2) =
   do compile e1
@@ -318,9 +327,6 @@ makeObject fargs = do
                    , names = PyTuple $ map PyString (keysOrdered vnames)
                    }
   return obj
-  where
-    makeConstants = Map.keys
-    makeNames = Map.elems
 
 emitWriteVar fname = do
   cId <- createConstant fname

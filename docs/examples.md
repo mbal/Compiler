@@ -9,7 +9,7 @@ idea of what I want for X.
 Using the agenda operator and a hook:
 
     function fact(n) = ([1', (* fact . dec)] @ (n > 0))(n)
-
+    
     function dec(k) = k - 1
 
 Or, equivalently, using the hook (f g)(x) = f(k, g(k))

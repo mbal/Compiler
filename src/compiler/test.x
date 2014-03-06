@@ -1,8 +1,6 @@
-let a = 5;
-let b = a + 4;
-print(a);
-let c = [4, 1, 2];
-function(a, b, c);
-function(if a then b else c);
-function(let a = 4, 3, if a then b else c, []);
-function;
+function fact(n) =
+    if n then n * fact(n-1) else 1;
+
+print(fact(10))
+
+x = [1,2,3]
