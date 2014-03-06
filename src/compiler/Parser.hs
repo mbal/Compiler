@@ -11,10 +11,20 @@ data BOperation = Add
                 | Multiply
                 | Divide
                 | At
+                | Greater
+                | Lesser
+                | Equal  
+                | NotEqual  
+                | GEQ
+                | LEQ
+                | And
+                | Or
                 deriving (Show, Eq)
 
 data UOperation = Minus
+                | Plus
                 | Prime
+                | Not
                 deriving (Show, Eq)
 
 data Term = Var Identifier -- variable definition
@@ -22,14 +32,21 @@ data Term = Var Identifier -- variable definition
           | Const Value -- constant definition
           | Array [Term]
           | BinaryOp BOperation Term Term -- binary operation
-          | UnaryOp UOperation Term -- unary operation (unary -, fix operator)
+          -- | ComparisonOp COperation Term Term -- comparison
+          | UnaryOp UOperation Term -- unary operation (unary -, prime operator)
           | If Term Term Term -- if
           | Let Identifier Term -- let binding
           | Defun Identifier [Identifier] Term
           deriving (Show, Eq)
 
 type Identifier = String
-type Value = Integer -- currently, we support only integers
+
+data Value = Number Integer
+           | Nil
+           | VTrue
+           | VFalse
+           | StringValue String
+           deriving (Eq, Show)  
 
 languageDef =
   emptyDef { Token.commentStart    = "/*"
@@ -42,10 +59,9 @@ languageDef =
                                      , "else"
                                      , "true"
                                      , "false"
-                                     , "not"
-                                     , "and"
-                                     , "or"]
+                                     , "nil"]
            , Token.reservedOpNames = [ "+", "-", "'", "*", "/", "=", "@"
+                                     , "<", ">", "<=", ">=", "=="
                                      , "and", "or", "not" ]
            }
 
@@ -61,36 +77,58 @@ parens     = Token.parens     lexer -- parses surrounding parenthesis:
 integer    = Token.integer    lexer -- parses an integer
 semi       = Token.semi       lexer -- parses a semicolon
 whiteSpace = Token.whiteSpace lexer -- parses whitespace
+stringLiteral     = Token.stringLiteral lexer
 
 brackets = Token.brackets lexer
 comma = Token.comma lexer
 
+nil = do reserved "none"
+         return $ Const Nil
+true = do reserved "true"
+          return $ Const VTrue
+false = do reserved "false"
+           return $ Const VFalse
+
+number = do v <- integer
+            return $ Const (Number v)
+
+stringValue = do
+  value <- stringLiteral
+  return $ Const (StringValue value)
+
 array =
-  do c <- brackets (sepBy expression comma) -- parses an array
+  do c <- brackets (sepBy expr' comma) -- parses an array
      return $ Array c
 
-parser = seqOfExpression <* eof
+parser = (many ((letBinding <|> expression) <* semi)) <* eof
 
 seqOfExpression =
   do list <- (endBy expr' semi)
      return list
 
 expression = expr'
-expr' = letBinding
+expr' = ifExpression
         <|> functionDefinition
-        <|> ifExpression
         <|> arithExpression
-        <|> array
+
+constant = nil
+           <|> true
+           <|> false
+           <|> stringValue
+           <|> number
 
 functionDefinition =
   do reserved "function"
      name <- identifier
-     parameters <- parens variables
+     parameters <- parens formalParams
      reserved "="
      body <- expression
      return $ Defun name parameters body
 
-variables = sepBy identifier comma
+variable = do name <- identifier
+              return $ Var name
+           
+formalParams = sepBy identifier comma
   
 ifExpression =
   do reserved "if"
@@ -115,21 +153,51 @@ funApplication =
   <|> delimExpr
 
 delimExpr = parens expression
-            <|> liftM Var identifier
-            <|> liftM Const integer
+            <|> variable
+            <|> constant
             <|> array
 
 arithExpression = buildExpressionParser aOperators funApplication
 
-aOperators = [ [Prefix (reservedOp "-" >> return (UnaryOp Minus))]
+{-aOperators = [ [Prefix (reservedOp "-" >> return (UnaryOp Minus))
+                , Prefix (reservedOp "+" >> return (UnaryOp Plus)) ]
+             , [Prefix (reservedOp "not" >> return (UnaryOp Minus))]
              , [Postfix (reservedOp "'" >> return (UnaryOp Prime))]
              , [Infix (reservedOp "@" >> return (BinaryOp At)) AssocLeft]
-             , [Infix (reservedOp "*" >> return (BinaryOp Multiply)) AssocLeft]
-             , [Infix (reservedOp "/" >> return (BinaryOp Divide)) AssocLeft]
-             , [Infix (reservedOp "+" >> return (BinaryOp Add)) AssocLeft]
-             , [Infix (reservedOp "-" >> return (BinaryOp Subtract)) AssocLeft]
-              ]
+             , [Infix (reservedOp "*" >> return (BinaryOp Multiply)) AssocLeft
+                , Infix (reservedOp "/" >> return (BinaryOp Divide)) AssocLeft]
+             , [Infix (reservedOp "+" >> return (BinaryOp Add)) AssocLeft,
+                Infix (reservedOp "-" >> return (BinaryOp Subtract)) AssocLeft]
+             , [Infix (reservedOp ">" >> return (BinaryOp Greater)) AssocLeft
+                , Infix (reservedOp "<" >> return (BinaryOp Lesser)) AssocNone
+                , Infix (reservedOp "<=" >> return (BinaryOp LEQ)) AssocNone
+                , Infix (reservedOp ">=" >> return (BinaryOp GEQ)) AssocNone
+                , Infix (reservedOp "==" >> return (BinaryOp Equal)) AssocNone
+                , Infix (reservedOp "!=" >> return (BinaryOp NotEqual)) AssocNone]
+              ] -}
 
+aOperators = [ [ prefix "-" (UnaryOp Minus)]
+             , [ prefix "+" (UnaryOp Plus) ]
+             , [ prefix "not" (UnaryOp Not) ]
+             , [ postfix "'" (UnaryOp Prime) ]
+             , [ binary "@" (BinaryOp At) AssocLeft ]
+             , [ binary "*" (BinaryOp Multiply) AssocLeft,
+                 binary "/" (BinaryOp Divide) AssocLeft ]
+             , [ binary "+" (BinaryOp Add) AssocLeft,
+                 binary "-" (BinaryOp Subtract) AssocLeft ]
+             , [ binary ">" (BinaryOp Greater) AssocNone,
+                 binary "<" (BinaryOp Lesser) AssocNone,
+                 binary "<=" (BinaryOp LEQ) AssocNone,
+                 binary ">=" (BinaryOp GEQ) AssocNone,
+                 binary "==" (BinaryOp Equal) AssocNone,
+                 binary "!=" (BinaryOp NotEqual) AssocNone ]
+             , [ binary "and" (BinaryOp And) AssocLeft,
+                 binary "or" (BinaryOp Or) AssocLeft ]
+             ]
+
+prefix name fun = Prefix (do { reservedOp name; return fun })
+postfix name fun = Postfix (do {reservedOp name; return fun })
+binary name fun assoc = Infix (do { reservedOp name; return fun }) assoc
 -- function for testing
 parseFile file =
   do program  <- readFile file
