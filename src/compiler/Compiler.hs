@@ -12,7 +12,7 @@ import Debug.Trace
 import Data.Char
 import qualified Data.Map as Map hiding (map)
 
-import Parser (Term(..), BOperation(..), UOperation(..), Identifier)
+import Parser (Term(..), BOperation(..), UOperation(..), Identifier, Value(..))
 import Bytecode
 import Emit
 import Types
@@ -209,6 +209,25 @@ returnNone =
      emitCodeArg LOAD_CONST noneId
      emitCodeNoArg RETURN_VALUE
 
+
+compile (Array elements) =
+  do mapM compile elements
+     emitCodeArg BUILD_LIST (fromIntegral (length elements))
+  
+--- TODO: is it true?
+compile (UnaryOp Plus e) =
+  compile e
+
+compile (UnaryOp Minus e) =
+  case e of
+    Const (Number k) -> compile (Const (Number (-k)))
+    _ -> do compile e
+            emitCodeNoArg UNARY_NEGATIVE
+
+compile (UnaryOp Not e) = do
+  compile e
+  emitCodeNoArg UNARY_NOT
+
 compile (UnaryOp Prime e) = do
   oldState <- getBlockState id
   modify $ \s -> s { cBlock = initBlock }
@@ -219,34 +238,38 @@ compile (UnaryOp Prime e) = do
   compiledBody <- makeObject []
   modify $ \s -> s { cBlock = oldState }
   compileClosure (PyString { string="<lambda>" }) compiledBody []
-
-compile (Array elements) =
-  do mapM compile elements
-     emitCodeArg BUILD_LIST (fromIntegral (length elements))
-  
-compile (UnaryOp Minus e) =
-  case e of
-    Const k -> compile (Const (-k))
-    _ -> do compile e
-            emitCodeNoArg UNARY_NEGATIVE
      
 compile (BinaryOp At e1 idx) =
   do compile e1
      compile idx
      emitCodeNoArg BINARY_SUBSCR
-     
-compile (BinaryOp op e1 e2) =
-  do compile e1
-     compile e2
-     emitCodeNoArg $ emitOp op
-     where emitOp Add = BINARY_ADD
-           emitOp Subtract = BINARY_SUBTRACT
-           emitOp Multiply = BINARY_MULTIPLY
-           emitOp Divide = BINARY_TRUE_DIVIDE
-           emitOp _ = error "compile BinaryOp: not valid"
 
-compile (Const a) = do
+compile (BinaryOp And e1 e2) = do
+  compile e1
+  end <- newLabel
+  emitCodeArg JUMP_IF_FALSE_OR_POP end
+  compile e2
+  assignLabel end
+
+compile (BinaryOp Or e1 e2) = do
+  compile e1
+  end <- newLabel
+  emitCodeArg JUMP_IF_TRUE_OR_POP end
+  compile e2
+  assignLabel end
+     
+compile node@(BinaryOp op e1 e2) =
+  if isArith op then
+    compileArith node
+  else
+    compileComparison node
+
+compile (Const (Number a)) = do
   cId <- createConstant (PyInt { intvalue = a })
+  emitCodeArg LOAD_CONST cId
+
+compile (Const (StringValue s)) = do
+  cId <- createConstant (PyString { string= s})
   emitCodeArg LOAD_CONST cId
 
 compile (Let k e) = do
@@ -259,7 +282,8 @@ compile (Var k) = do
   res <- searchVariable k
   case res of
     Just (typ, x) -> emitReadVar typ x
-    Nothing -> error $ "Unknown variable " ++ (show k)
+    Nothing -> do gId <- createGlobalVariable k
+                  emitReadVar Global gId
 
 compile (If cond thn els) = do
   compile cond
@@ -370,3 +394,30 @@ createGlobalVariable name = do
   names <- getBlockState block_names
   modifyBlockState $ \s -> s { block_names = Map.insert name gId names }
   return gId
+
+isArith Add = True
+isArith Subtract = True
+isArith Multiply = True
+isArith Divide = True
+isArith _ = False
+
+compileArith (BinaryOp op e1 e2) =
+  do compile e1
+     compile e2
+     emitCodeNoArg $ emitOp op
+     where emitOp Add = BINARY_ADD
+           emitOp Subtract = BINARY_SUBTRACT
+           emitOp Multiply = BINARY_MULTIPLY
+           emitOp Divide = BINARY_TRUE_DIVIDE
+           emitOp _ = error "compileArith: operation not valid"
+
+compileComparison (BinaryOp op e1 e2) =
+  do compile e1
+     compile e2
+     emitCodeArg COMPARE_OP (opKind op) 
+  where opKind Lesser = 0
+        opKind LEQ = 1
+        opKind Equal = 2
+        opKind NotEqual = 3
+        opKind Greater = 4
+        opKind GEQ = 5
