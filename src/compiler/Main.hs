@@ -4,11 +4,16 @@ import Control.Monad.State
 import Emit
 import Compiler
 import Parser
+import Definition
+
+desugar :: a -> a
+desugar = id
 
 main :: IO ()
 main = Emit.writeFile
-       (execState 
-        (runCompilerState $ compileTopLevel $ parseAST
-         "function fact(n) = if n == 0 then 1 else n * fact(n-1); print(fact(10));")
-         initState)
-        "c:\\users\\utente\\desktop\\out.pyc"
+       (let ast = parseAST "function f(a) = 3*a; print(f(3));"
+            annotatedAST = id ast
+            desugared = desugar annotatedAST
+            compiled = compileTopLevel desugared in
+        execState (runCompilerState compiled) initState)
+       "c:\\users\\utente\\desktop\\out.pyc"
