@@ -1,13 +1,9 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving, RecordWildCards, MultiParamTypeClasses #-}
 module Compiler where
 import Control.Monad.Reader
-import Control.Monad.State
+import Control.Monad.State (MonadState, State, put, get, gets, modify)
 import Control.Applicative (Applicative)
-import qualified Data.ByteString.Lazy as B
-   (ByteString, hGetContents, unpack, hPutStr, length)
-import Control.Monad.Error (ErrorT (..), lift, replicateM)
-import Data.Word (Word32, Word16, Word8)
-import System.IO
+import Data.Word (Word16)
 import Debug.Trace
 import Data.Char
 import qualified Data.Map as Map hiding (map)
@@ -17,6 +13,7 @@ import Bytecode
 import Emit
 import Types
 
+initBlock :: CodeBlock
 initBlock = CodeBlock {
   block_instructions = []
   , block_names = Map.empty
@@ -36,6 +33,7 @@ initBlock = CodeBlock {
   , block_nextVariableID = 0
   }
 
+initState :: CState
 initState = CState {
   cMagic = 168686339
   , cBlock = initBlock
@@ -56,7 +54,7 @@ emitCode :: Instruction -> CompilerState ()
 emitCode inst = do
   labels <- getBlockState block_labelsForNextInstruction
   offset <- getBlockState block_instructionOffset
-  labelMap <- getBlockState block_labelMap
+  --labelMap <- getBlockState block_labelMap
   modifyBlockState $ \s -> s { block_labelsForNextInstruction = [] }
   forM_ labels (\x -> updateLabelMap x offset)
   oldInstructions <- getBlockState block_instructions
@@ -65,6 +63,7 @@ emitCode inst = do
     \s -> s { block_instructions = annotatedInstruction : oldInstructions
             , block_instructionOffset = offset + (instructionSize inst) }
 
+updateLabelMap :: LabelID -> Word16 -> CompilerState ()
 updateLabelMap label index = do
    oldLabelMap <- getBlockState block_labelMap
    let newLabelMap = Map.insert label index oldLabelMap
@@ -140,6 +139,17 @@ newVariable name =
      modifyBlockState $ \s -> s { block_names = Map.insert name vId vars }
      return vId
 
+nestedBlock computation = do
+  -- save the old state
+  oldState <- getBlockState id
+  -- get a new state
+  modify $ \s -> s { cBlock = initBlock }
+  -- run the computation
+  result <- computation
+  -- restore the old state
+  modify $ \s -> s { cBlock = oldState }
+  return result
+
 {-- ============= STATE ============= --}
 
 
@@ -176,27 +186,6 @@ computeTarget target instrIndex instr@(Instruction opcode _) =
     fromIntegral (target - (instrIndex + (instructionSize instr)))
   else
     fromIntegral target
-
-isJump :: OpCode -> Bool
-isJump x = isRelativeJump x || isAbsoluteJump x
-
-isRelativeJump :: OpCode -> Bool
-isRelativeJump JUMP_FORWARD = True
-isRelativeJump SETUP_LOOP = True
-isRelativeJump FOR_ITER = True
-isRelativeJump SETUP_FINALLY = True
-isRelativeJump SETUP_EXCEPT = True
-isRelativeJump SETUP_WITH = True
-isRelativeJump _ = False
-
-isAbsoluteJump :: OpCode -> Bool
-isAbsoluteJump POP_JUMP_IF_FALSE = True
-isAbsoluteJump POP_JUMP_IF_TRUE = True
-isAbsoluteJump JUMP_ABSOLUTE = True
-isAbsoluteJump CONTINUE_LOOP = True
-isAbsoluteJump JUMP_IF_FALSE_OR_POP = True
-isAbsoluteJump JUMP_IF_TRUE_OR_POP = True
-isAbsoluteJump _ = False
 
 {-- =========== ASSEMBLE ============ --}
 
@@ -248,6 +237,17 @@ compile (BinaryOp At e1 idx) =
      compile idx
      emitCodeNoArg BINARY_SUBSCR -}
 
+
+compile (BinaryOp Compose f1 f2) = do
+  compBody <- nestedBlock $
+              (do modifyBlockState $
+                    \s -> s { block_varnames = computeLocalsForFunction ["x"] }
+                  compile (FunApp f1 [(FunApp f2 [Var "x"])])
+                  emitCodeNoArg RETURN_VALUE
+                  assemble
+                  makeObject ["x"])
+  compileClosure (PyString { string="lambda" }) compBody ["x"]
+
 compile (BinaryOp And e1 e2) = do
   compile e1
   end <- newLabel
@@ -289,20 +289,17 @@ compile (Var k) = do
     Nothing -> do gId <- createGlobalVariable k
                   emitReadVar Global gId
 
-compile (Hook f1 f2) = 
-  traceShow ("hook" ++ (show f1) ++ (show f2)) $ 
-  do
-  -- create a function h(x) = f(x, g(x))
-  oldState <- getBlockState id
-  modify $ \s -> s { cBlock = initBlock }
-  modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction ["x"] }
-  -- create the new function application
-  compile (FunApp f1 [(Var "x"), (FunApp f2 [Var "x"])])
-  emitCodeNoArg RETURN_VALUE
-  assemble
-  compiledBody <- makeObject ["x"]
-  modify $ \s -> s { cBlock = oldState }
-  compileClosure (PyString { string="lambda" }) compiledBody ["x"]
+compile (Hook f1 f2) = do
+  --af1 <- arity f1
+  --af2 <- arity f2
+  -- thanks to the AST, both f1 and f2 are functions, but they could be
+  -- of the wrong arity (2 for f1 and 1 for f2). On the other hand, this
+  -- check is done by the python vm, for free. However, it would be nice
+  -- to be warned before.
+  --if isFunction f1 && isFunction f2 && (af1 == 2) && (af2 == 1) then
+  compileAnonFunction (Hook f1 f2)
+  --else
+  --  error "domain error: in a hook, (f g) must be f/2 and g/1"
   
 compile (If cond thn els) = do
   compile cond
@@ -321,61 +318,40 @@ compile (FunApp (Var "print") args) = do
   mapM compile args
   emitCodeNoArg PRINT_ITEM
 
-compile (FunApp (Var fname) args) =
-  traceShow args $
-  do
-    fns <- getBlockState block_functions
-    case Map.lookup fname fns of
-      Just fnObj -> emitFunctionCall fname fnObj args -- XXX: jk
-      Nothing -> {- here, we don't have the function ready, but
-                     it could be a variable, binded with let x = foo; -}
-        do (typ, x) <- getVariable fname -- XXX: kl
-           emitReadVar typ x
-           mapM compile args
-           emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
-
-{-compile (FunApp (Var fname) args) = do
-  res <- searchVariable fname
-  (typ, x) <- case res of
-    Just (a, b) -> do return (a, b)
-    Nothing -> do gId <- createGlobalVariable fname
-                  return (Global, gId)
-  emitReadVar typ x
-  mapM compile args
+compile (FunApp (Var fname) args) = do
   fns <- getBlockState block_functions
   case Map.lookup fname fns of
-    Nothing -> emitCodeArg CALL_FUNCTION (fromIntegral (length args))
-    Just fnObj -> if fun_numArgs fnObj /= length args then
-                    error $ "Function " ++ fname ++ "was called with" ++ 
-                    "too many arguments"
-                  else
-                    emitCodeArg CALL_FUNCTION (fromIntegral (length args))
--}
+    Just fnObj -> emitFunctionCall fname fnObj args
+    Nothing -> {- here, we don't have the function ready, but
+                  it could be a variable, binded with let x = foo; or
+                  it could be defined after -}
+      do (typ, x) <- getVariable fname
+         emitReadVar typ x
+         mapM compile args
+         emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
 
 compile (FunApp term args) =
-  traceShow args
-  (do case term of
-        (UnaryOp Prime _) -> do compile term
-                                emitCodeArg CALL_FUNCTION 0
-        _ -> do compile term
-                mapM compile args
-                emitCodeArg CALL_FUNCTION (fromIntegral (length args)))
+  do case term of
+       (UnaryOp Prime _) -> do compile term
+                               emitCodeArg CALL_FUNCTION 0
+       _ -> do compile term
+               mapM compile args
+               emitCodeArg CALL_FUNCTION (fromIntegral (length args))
 
 compile (Defun fname fargs body) = do
-  oldState <- getBlockState id
-  modify $ \s -> s { cBlock = initBlock }
-  modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction fargs }
-  modifyBlockState $ \s -> s { block_name = fname }
-  compile body
-  emitCodeNoArg RETURN_VALUE
-  assemble
-  compiledBody <- makeObject fargs
-  modify $ \s -> s { cBlock = oldState }
-  compileClosure (PyString { string=fname }) compiledBody fargs
+  compBody <- nestedBlock $
+              (do modifyBlockState $
+                    \s -> s { block_varnames = computeLocalsForFunction fargs
+                            , block_name = fname }
+                  compile body
+                  emitCodeNoArg RETURN_VALUE
+                  assemble
+                  makeObject fargs)
+  compileClosure (PyString { string=fname}) compBody fargs
   vId <- createFunction fname (length fargs) False
   emitCodeArg STORE_NAME vId
 
-compile other = traceShow other $ error "unknown"
+compile other = error $ "unknown: " ++ (show other)
 
 createFunction :: String -> Int -> Bool -> CompilerState Word16
 createFunction fname args isPrime = do
@@ -409,6 +385,7 @@ makeObject fargs = do
                    }
   return obj
 
+emitWriteVar :: PyType -> CompilerState ()
 emitWriteVar fname = do
   cId <- createConstant fname
   emitCodeArg STORE_NAME cId
@@ -418,6 +395,7 @@ compileClosure name cbody args =
   do compileConstantEmit cbody
      emitCodeArg MAKE_FUNCTION 0
 
+compileConstantEmit :: PyType -> CompilerState ()
 compileConstantEmit obj =
   do constantId <- createConstant obj
      emitCodeArg LOAD_CONST constantId
@@ -428,6 +406,7 @@ computeLocalsForFunction formalParameters =
 
 -- XXX: that's not really true, it also depends on the context (i.e.
 -- function, class, module, ...)
+emitReadVar :: VarType -> Word16 -> CompilerState ()
 emitReadVar typ index =
   case typ of
     Name -> emitCodeArg LOAD_NAME index
@@ -446,6 +425,7 @@ searchVariable varName = do
         Just y -> return $ Just (Global, y)
         Nothing -> return Nothing
 
+createGlobalVariable :: Identifier -> CompilerState VariableID
 createGlobalVariable name = do
   gId <- freshGlobalId
   names <- getBlockState block_names
@@ -478,6 +458,7 @@ compileComparison (BinaryOp op e1 e2) =
         opKind NotEqual = 3
         opKind Greater = 4
         opKind GEQ = 5
+        opKind o = error $ (show o)
 
 emitFunctionCall fname fnObj args = 
     if fun_isPrime fnObj then
@@ -499,7 +480,54 @@ getVariable name = do
                   return (Global, gId)
   return (typ, x)
 
-compileAt arrExpr idxExpr = 
-  do compile arrExpr
-     compile idxExpr
-     emitCodeNoArg BINARY_SUBSCR
+compileAgenda arrExpr idxExpr =
+  -- we compile the agenda version of At with an if expression
+  -- ([f, g]@k)(n) ==> let h = if k == 0 then f else g; h(n);
+  -- ([f, g]@k)    ==> let h = if k == 0 then f else g;
+  -- unluckily, neither this approach can solve the problem with the
+  -- primed function (that can be called with any number of arguments)
+  traceShow arrExpr $ 
+  compile (If (BinaryOp Equal idxExpr (Const (Number 0)))
+           (arrExpr !! 0)
+           (arrExpr !! 1))
+
+compileAt arrExpr@(Array elems) idxExpr = do
+  compile arrExpr
+  compile idxExpr
+  emitCodeNoArg BINARY_SUBSCR
+  {-if (all isFunction elems) then
+    compileAgenda elems idxExpr
+  else do compile arrExpr
+          compile idxExpr
+          emitCodeNoArg BINARY_SUBSCR -}
+
+searchFunction k = do
+  fns <- getBlockState block_functions
+  return $ Map.lookup k fns
+
+isFunction (BinaryOp Compose _ _) = True
+isFunction (BinaryOp _ _ _) = False
+isFunction (BinOp _) = False
+isFunction (UnaryOp Prime _) = True
+isFunction (UnaryOp _ _) = False
+isFunction (Var k) = True -- XXX: not true
+isFunction (Hook _ _) = True
+isFunction (FunApp _ _) = False
+isFunction (Defun _ _ _) = False
+
+arity :: Term -> CompilerState Int
+arity (Var f) = do
+  fns <- getBlockState block_functions
+  case Map.lookup f fns of
+    Nothing -> error $ "not a function"
+    Just fnObj -> return $ (fun_numArgs fnObj)
+
+compileAnonFunction (Hook f1 f2) = do
+  compBody <- nestedBlock $
+              (do modifyBlockState $
+                    \s -> s { block_varnames = computeLocalsForFunction ["x"] }
+                  compile (FunApp f1 [(Var "x"), (FunApp f2 [Var "x"])])
+                  emitCodeNoArg RETURN_VALUE
+                  assemble
+                  makeObject ["x"])
+  compileClosure (PyString { string="lambda" }) compBody ["x"]
