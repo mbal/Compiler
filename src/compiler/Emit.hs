@@ -13,7 +13,7 @@ import Control.Monad.Error (ErrorT (..), lift, replicateM)
 import Data.Word (Word32, Word16, Word8)
 import System.IO
 import Data.Binary.Put
-import qualified Data.Map as Map hiding (map)
+import qualified Data.Map as Map
 
 import Types
 import Bytecode
@@ -145,7 +145,10 @@ writeCode codeObject =
   do
     writeInstructions $ map instr (block_instructions codeObject)
     writeConstants $ reverse (block_constants codeObject)
-    writeTuple $ map PyString (keysOrdered (block_names codeObject))
+    writeTuple $ map PyString $ keysOrdered
+      (Map.union
+       (block_names codeObject)
+       (Map.map fun_location (block_functions codeObject)))
     writeTuple $ map PyString (keysOrdered (block_varnames codeObject))
     writeTuple $ map PyString (keysOrdered (block_freevars codeObject))
     writeTuple $ map PyString (keysOrdered (block_cellvars codeObject))
@@ -229,7 +232,7 @@ writeConst (PyCode {..}) = do
   writeU8 $ encodeType CODE
   mapM_ writeU32 [argcount, nlocals, stackSize, flags]
   mapM_ writeObject [code, consts, names, varnames, PyTuple [],
-                     PyTuple [], PyString "fname", PyString "function"]
+                     PyTuple [], PyString "fname", name ]
   writeU32 1
   writeString $ PyString { string = "a" }
 

@@ -31,6 +31,7 @@ data PyType = PyInt { intvalue :: Integer }
                        , consts :: PyType
                        , varnames :: PyType
                        , names :: PyType
+                       , name :: PyType
                        }
             deriving (Show, Ord, Eq)
 
@@ -48,10 +49,13 @@ data CState = CState {
   } deriving (Show)
 
 data VarType = Global | Fast | Deref | Name
+             deriving (Show, Ord, Eq)
 
 data Function = Function { fun_numArgs :: Int
                          , fun_isPrime :: Bool
                          , fun_location :: Word16
+                         -- actually, a function is always either global or fast
+                         , fun_type :: VarType
                          }
                 deriving (Ord, Show)
 
@@ -63,8 +67,8 @@ data CodeBlock = CodeBlock {
   , block_constantsMap :: Map.Map PyType Word16
   , block_constants :: [PyType]
   , block_names :: Map.Map Identifier Word16 -- globals
-  , block_functions :: Map.Map Identifier Function -- basically, other globals
-    -- but reserved for functions
+  , block_functions :: Map.Map Identifier Function 
+  -- basically, other globals but reserved for functions
   , block_varnames :: Map.Map Identifier Word16 -- python's locals
   , block_freevars :: Map.Map Identifier Word16 -- unused for now
   , block_cellvars :: Map.Map Identifier Word16 -- "" ""

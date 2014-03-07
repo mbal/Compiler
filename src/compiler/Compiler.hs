@@ -22,6 +22,7 @@ initBlock = CodeBlock {
   , block_names = Map.empty
   , block_constantsMap = Map.empty
   , block_constants = []
+  , block_functions = Map.empty
   , block_varnames = Map.empty
   , block_freevars = Map.empty
   , block_cellvars = Map.empty
@@ -214,7 +215,7 @@ compile (Array elements) =
   do mapM compile elements
      emitCodeArg BUILD_LIST (fromIntegral (length elements))
   
---- TODO: is it true?
+--- small optimization, but XXX: is it true?
 compile (UnaryOp Plus e) =
   compile e
 
@@ -240,9 +241,12 @@ compile (UnaryOp Prime e) = do
   compileClosure (PyString { string="<lambda>" }) compiledBody []
      
 compile (BinaryOp At e1 idx) =
-  do compile e1
+  case e1 of
+    (Array _) -> compileAt e1 idx
+    _ -> error $ "@ operator used on non array element"
+  {-do compile e1
      compile idx
-     emitCodeNoArg BINARY_SUBSCR
+     emitCodeNoArg BINARY_SUBSCR -}
 
 compile (BinaryOp And e1 e2) = do
   compile e1
@@ -269,7 +273,7 @@ compile (Const (Number a)) = do
   emitCodeArg LOAD_CONST cId
 
 compile (Const (StringValue s)) = do
-  cId <- createConstant (PyString { string= s})
+  cId <- createConstant (PyString { string = s})
   emitCodeArg LOAD_CONST cId
 
 compile (Let k e) = do
@@ -285,6 +289,21 @@ compile (Var k) = do
     Nothing -> do gId <- createGlobalVariable k
                   emitReadVar Global gId
 
+compile (Hook f1 f2) = 
+  traceShow ("hook" ++ (show f1) ++ (show f2)) $ 
+  do
+  -- create a function h(x) = f(x, g(x))
+  oldState <- getBlockState id
+  modify $ \s -> s { cBlock = initBlock }
+  modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction ["x"] }
+  -- create the new function application
+  compile (FunApp f1 [(Var "x"), (FunApp f2 [Var "x"])])
+  emitCodeNoArg RETURN_VALUE
+  assemble
+  compiledBody <- makeObject ["x"]
+  modify $ \s -> s { cBlock = oldState }
+  compileClosure (PyString { string="lambda" }) compiledBody ["x"]
+  
 compile (If cond thn els) = do
   compile cond
   flsLabel <- newLabel
@@ -302,10 +321,20 @@ compile (FunApp (Var "print") args) = do
   mapM compile args
   emitCodeNoArg PRINT_ITEM
 
--- XXX: not very nice.
--- It would be much better if searchVariable took a `context`, and
--- optionally created variables (if the context allows for it)
-compile (FunApp (Var fname) args) = do
+compile (FunApp (Var fname) args) =
+  traceShow args $
+  do
+    fns <- getBlockState block_functions
+    case Map.lookup fname fns of
+      Just fnObj -> emitFunctionCall fname fnObj args -- XXX: jk
+      Nothing -> {- here, we don't have the function ready, but
+                     it could be a variable, binded with let x = foo; -}
+        do (typ, x) <- getVariable fname -- XXX: kl
+           emitReadVar typ x
+           mapM compile args
+           emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
+
+{-compile (FunApp (Var fname) args) = do
   res <- searchVariable fname
   (typ, x) <- case res of
     Just (a, b) -> do return (a, b)
@@ -313,32 +342,59 @@ compile (FunApp (Var fname) args) = do
                   return (Global, gId)
   emitReadVar typ x
   mapM compile args
-  emitCodeArg CALL_FUNCTION (fromIntegral (length args))
+  fns <- getBlockState block_functions
+  case Map.lookup fname fns of
+    Nothing -> emitCodeArg CALL_FUNCTION (fromIntegral (length args))
+    Just fnObj -> if fun_numArgs fnObj /= length args then
+                    error $ "Function " ++ fname ++ "was called with" ++ 
+                    "too many arguments"
+                  else
+                    emitCodeArg CALL_FUNCTION (fromIntegral (length args))
+-}
 
-compile (FunApp term args) = do
-  compile term
-  mapM compile args
-  emitCodeArg CALL_FUNCTION (fromIntegral (length args))
+compile (FunApp term args) =
+  traceShow args
+  (do case term of
+        (UnaryOp Prime _) -> do compile term
+                                emitCodeArg CALL_FUNCTION 0
+        _ -> do compile term
+                mapM compile args
+                emitCodeArg CALL_FUNCTION (fromIntegral (length args)))
 
 compile (Defun fname fargs body) = do
   oldState <- getBlockState id
   modify $ \s -> s { cBlock = initBlock }
   modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction fargs }
+  modifyBlockState $ \s -> s { block_name = fname }
   compile body
   emitCodeNoArg RETURN_VALUE
   assemble
   compiledBody <- makeObject fargs
   modify $ \s -> s { cBlock = oldState }
   compileClosure (PyString { string=fname }) compiledBody fargs
-  vId <- createVariable fname
+  vId <- createFunction fname (length fargs) False
   emitCodeArg STORE_NAME vId
 
---makeObject :: CompilerState PyType
+compile other = traceShow other $ error "unknown"
+
+createFunction :: String -> Int -> Bool -> CompilerState Word16
+createFunction fname args isPrime = do
+  oldFuns <- getBlockState block_functions
+  fId <- freshVariableId
+  let fobj = Function { fun_numArgs = args
+                      , fun_isPrime = isPrime
+                      , fun_location = fId
+                      , fun_type = Global
+                      }
+  modifyBlockState $ \s -> s { block_functions = Map.insert fname fobj oldFuns }
+  return fId
+
 makeObject fargs = do
   instr <- getBlockState block_instructions
   cnst <- getBlockState block_constants
   locals <- getBlockState block_varnames
   vnames <- getBlockState block_names
+  bname <- getBlockState block_name
   let obj = PyCode {
                    argcount = fromIntegral (length fargs)
                    , nlocals = fromIntegral (length $ Map.toList locals)
@@ -349,6 +405,7 @@ makeObject fargs = do
                    , consts = PyTuple $ reverse cnst
                    , varnames = PyTuple $ map PyString (keysOrdered locals)
                    , names = PyTuple $ map PyString (keysOrdered vnames)
+                   , name = PyString bname
                    }
   return obj
 
@@ -421,3 +478,28 @@ compileComparison (BinaryOp op e1 e2) =
         opKind NotEqual = 3
         opKind Greater = 4
         opKind GEQ = 5
+
+emitFunctionCall fname fnObj args = 
+    if fun_isPrime fnObj then
+        emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
+    else
+        if (length args) /= (fun_numArgs fnObj) then
+            error $ "ERROR: function " ++ fname ++ "was called with " ++ 
+                (show $ length args) ++ " but needs " ++
+                (show $ fun_numArgs fnObj)
+        else do emitReadVar (fun_type fnObj) (fun_location fnObj)
+                mapM compile args
+                emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
+
+getVariable name = do
+  res <- searchVariable name
+  (typ, x) <- case res of
+    Just (a, b) -> do return (a, b)
+    Nothing -> do gId <- createGlobalVariable name
+                  return (Global, gId)
+  return (typ, x)
+
+compileAt arrExpr idxExpr = 
+  do compile arrExpr
+     compile idxExpr
+     emitCodeNoArg BINARY_SUBSCR
