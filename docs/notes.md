@@ -32,22 +32,22 @@ In particular:
   the only way to do it in Python is to apply the `let` to `def`
   translation (as shown in SICP). 
 
-    LOAD 4
-    LOAD 2
-    +-------------+
-    |      4      |
-    +-------------+
-    |      2      |
-    +-------------+
-    |      1      |  ----> 1 was on the stack before
-    +-------------+
+        LOAD 4
+        LOAD 2
+        +-------------+
+        |      4      |
+        +-------------+
+        |      2      |
+        +-------------+
+        |      1      |  ----> 1 was on the stack before
+        +-------------+
 
-    BINARY_ADD
-    +-------------+
-    |      6      |
-    +-------------+
-    |      1      | ----> 1 remains on the stack
-    +-------------+
+        BINARY_ADD
+        +-------------+
+        |      6      |
+        +-------------+
+        |      1      | ----> 1 remains on the stack
+        +-------------+
 
 All the constants are saved in a special area of the bytecode file,
 and they're referred to by the index in this area. This means that all
