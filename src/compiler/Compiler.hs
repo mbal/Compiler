@@ -237,17 +237,6 @@ compile (BinaryOp At e1 idx) =
      compile idx
      emitCodeNoArg BINARY_SUBSCR -}
 
-
-compile (BinaryOp Compose f1 f2) = do
-  compBody <- nestedBlock $
-              (do modifyBlockState $
-                    \s -> s { block_varnames = computeLocalsForFunction ["x"] }
-                  compile (FunApp f1 [(FunApp f2 [Var "x"])])
-                  emitCodeNoArg RETURN_VALUE
-                  assemble
-                  makeObject ["x"])
-  compileClosure (PyString { string="lambda" }) compBody ["x"]
-
 compile (BinaryOp And e1 e2) = do
   compile e1
   end <- newLabel
@@ -288,18 +277,6 @@ compile (Var k) = do
     Just (typ, x) -> emitReadVar typ x
     Nothing -> do gId <- createGlobalVariable k
                   emitReadVar Global gId
-
-compile (Hook f1 f2) = do
-  --af1 <- arity f1
-  --af2 <- arity f2
-  -- thanks to the AST, both f1 and f2 are functions, but they could be
-  -- of the wrong arity (2 for f1 and 1 for f2). On the other hand, this
-  -- check is done by the python vm, for free. However, it would be nice
-  -- to be warned before.
-  --if isFunction f1 && isFunction f2 && (af1 == 2) && (af2 == 1) then
-  compileAnonFunction (Hook f1 f2)
-  --else
-  --  error "domain error: in a hook, (f g) must be f/2 and g/1"
   
 compile (If cond thn els) = do
   compile cond
@@ -458,7 +435,6 @@ compileComparison (BinaryOp op e1 e2) =
         opKind NotEqual = 3
         opKind Greater = 4
         opKind GEQ = 5
-        opKind o = error $ (show o)
 
 emitFunctionCall fname fnObj args = 
     if fun_isPrime fnObj then
@@ -505,13 +481,10 @@ searchFunction k = do
   fns <- getBlockState block_functions
   return $ Map.lookup k fns
 
-isFunction (BinaryOp Compose _ _) = True
 isFunction (BinaryOp _ _ _) = False
-isFunction (BinOp _) = False
 isFunction (UnaryOp Prime _) = True
 isFunction (UnaryOp _ _) = False
 isFunction (Var k) = True -- XXX: not true
-isFunction (Hook _ _) = True
 isFunction (FunApp _ _) = False
 isFunction (Defun _ _ _) = False
 
@@ -522,7 +495,7 @@ arity (Var f) = do
     Nothing -> error $ "not a function"
     Just fnObj -> return $ (fun_numArgs fnObj)
 
-compileAnonFunction (Hook f1 f2) = do
+compileAnonFunction f1 f2 = do
   compBody <- nestedBlock $
               (do modifyBlockState $
                     \s -> s { block_varnames = computeLocalsForFunction ["x"] }
