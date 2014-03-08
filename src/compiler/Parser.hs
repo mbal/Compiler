@@ -3,6 +3,7 @@ import Control.Monad
 import Text.ParserCombinators.Parsec.Language
 import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Expr
+import Text.Parsec.Prim (manyAccum)
 import Control.Applicative ((<*))
 import qualified Text.ParserCombinators.Parsec.Token as Token
 
@@ -11,7 +12,6 @@ data BOperation = Add
                 | Multiply
                 | Divide
                 | At
-                | Compose  
                 | Greater
                 | Lesser
                 | Equal  
@@ -37,12 +37,13 @@ data Term = Var Identifier -- variable definition
           | If Term Term Term -- if
           | Let Identifier Term -- let binding
           | Defun Identifier [Identifier] Term
-          | Hook Term Term  
-          | BinOp BOperation
-          | UnOp UOperation  
+          | SpecialForm SFKind [Term]
           deriving (Show, Eq)
 
 type Identifier = String
+
+data SFKind = Hook | Gerund | Compose
+            deriving (Show, Eq)
 
 data Value = Number Integer
            | Nil
@@ -81,6 +82,7 @@ integer    = Token.integer    lexer -- parses an integer
 semi       = Token.semi       lexer -- parses a semicolon
 whiteSpace = Token.whiteSpace lexer -- parses whitespace
 stringLiteral     = Token.stringLiteral lexer
+angles = Token.angles lexer
 
 brackets = Token.brackets lexer
 comma = Token.comma lexer
@@ -103,13 +105,66 @@ array =
   do c <- brackets (sepBy expr' comma) -- parses an array
      return $ Array c
 
-parser = (many ((letBinding <|> expression) <* semi)) <* eof
+parser = do
+  many imports
+  v <- (many ((letBinding <|> expression) <* semi))
+  eof
+  return v
 
-seqOfExpression =
-  do list <- (endBy expr' semi)
-     return list
+expression = ifExpression
+             <|> functionDefinition
+             <|> arithExpression
+             <|> specialForm
 
-expression = expr'
+specialForm = do
+  c <- angles functional
+  return $ SpecialForm Hook c
+
+functional = hook
+
+hook = 
+  try (do v <- gerund
+          reserved ","
+          vs <- hook
+          return $ v ++ vs)
+  <|> (do v <- gerund
+          return $ v)
+
+gerund = 
+  try (do f <- compose
+          reserved "?"
+          gs <- gerund
+          return $ [SpecialForm Gerund (f ++ gs)])
+  <|> (do v <- compose
+          return $ v)
+
+compose = 
+  try (do f <- fun
+          reserved "."
+          gs <- compose
+          return $ [SpecialForm Compose (f:gs)])
+  <|>  (do f <- fun
+           return $ [f])
+
+fun = function <|> specialForm
+
+function = do
+  fun <- variable 
+  parsRes <- optionMaybe (parens (sepBy expression comma))
+  case parsRes of
+    Just res -> do return $ FunApp fun res
+    Nothing -> do return $ fun
+  
+application =
+  try (do fun <- delimExpr
+          a <- parens (sepBy expression comma)
+          return $ FunApp fun a)
+
+primed = do
+  c <- constant
+  reserved "'"
+  return $ UnaryOp Prime c
+  
 expr' = ifExpression
         <|> functionDefinition
         <|> arithExpression
@@ -155,23 +210,10 @@ funApplication =
           return $ FunApp fun a)
   <|> delimExpr
 
-delimExpr = (try (parens hook))
-            <|> (try funCompose)
-            <|> parens expression
+delimExpr = parens expression
             <|> variable
             <|> constant
             <|> array
-
-funCompose = chainr1 opOrFun (do { (reserved "."); return $ BinaryOp Compose })
-
-hook = do
-  f1 <- funCompose
-  f2 <- funCompose
-  return (Hook f1 f2)
-
-opOrFun = variable
-          <|> ((reserved "+") >> return (BinOp Add))
-          <|> ((reserved "*") >> return (BinOp Multiply))
 
 arithExpression = buildExpressionParser aOperators funApplication
 
@@ -202,7 +244,7 @@ parseFile file =
   do program  <- readFile file
      case parse parser "" program of
        Left e  -> print e >> fail "parse error"
-       Right r -> return r
+       Right r -> do return r
 
 parseString str =
   case parse parser "" str of
@@ -210,3 +252,11 @@ parseString str =
     Right r -> r
 
 parseAST = parseString
+
+getASTFromFile = parseFile
+
+imports = do
+  reserved "import"
+  id <- identifier
+  reserved ";"
+  return id
