@@ -301,7 +301,7 @@ compile (FunApp (Var fname) args) = do
     Just fnObj -> emitFunctionCall fname fnObj args
     Nothing -> {- here, we don't have the function ready, but
                   it could be a variable, binded with let x = foo; or
-                  it could be defined after -}
+                  it could be defined after. -}
       do (typ, x) <- getVariable fname
          emitReadVar typ x
          mapM compile args
@@ -487,13 +487,6 @@ isFunction (UnaryOp _ _) = False
 isFunction (Var k) = True -- XXX: not true
 isFunction (FunApp _ _) = False
 isFunction (Defun _ _ _) = False
-
-arity :: Term -> CompilerState Int
-arity (Var f) = do
-  fns <- getBlockState block_functions
-  case Map.lookup f fns of
-    Nothing -> error $ "not a function"
-    Just fnObj -> return $ (fun_numArgs fnObj)
 
 compileAnonFunction f1 f2 = do
   compBody <- nestedBlock $

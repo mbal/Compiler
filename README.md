@@ -15,9 +15,4 @@ conditionals. Let's focus instead on what it can do:
 * function definition
 * function call
 * print
-
-What's coming next?
 * if
-
-
-
