@@ -6,7 +6,7 @@ import Control.Applicative (Applicative)
 import Data.Word (Word16)
 import Debug.Trace
 import Data.Char
-import qualified Data.Map as Map hiding (map)
+import qualified Data.Map as Map
 
 import Parser (Term(..), BOperation(..), UOperation(..), Identifier, Value(..))
 import Bytecode
@@ -38,6 +38,7 @@ initState = CState {
   cMagic = 168686339
   , cBlock = initBlock
   , cFilename = "out"
+  , cDefinitions = Map.empty
   }
 
 newtype CompilerState a = CompilerState { runCompilerState :: State CState a }
@@ -80,7 +81,10 @@ modifyBlockState f = do
   state <- getBlockState id
   setBlockState $ f state
 
+getBlockState :: (CodeBlock -> a) -> CompilerState a
 getBlockState f = gets (f . cBlock)
+
+setBlockState :: CodeBlock -> CompilerState ()
 setBlockState newState = do
   oldState <- get
   put $ oldState { cBlock = newState }
@@ -91,6 +95,7 @@ newLabel = do
   modifyBlockState $ \s -> s { block_nextLabelID = lId + 1 }
   return lId
 
+assignLabel :: LabelID -> CompilerState ()
 assignLabel lblId = do
   oldLbl <- getBlockState block_labelsForNextInstruction
   modifyBlockState $ \s -> s { block_labelsForNextInstruction = lblId : oldLbl }
@@ -108,6 +113,7 @@ createConstant obj =
        Nothing -> newConstant obj
        Just x -> return x
 
+newConstant :: PyType -> CompilerState Word16
 newConstant name =
   do cId <- freshConstantId
      cMap <- getBlockState block_constantsMap
@@ -122,23 +128,27 @@ freshVariableId =
      modifyBlockState $ \s -> s { block_nextVariableID = x + 1 }
      return x
 
+freshGlobalId :: CompilerState Word16
 freshGlobalId =
   do x <- getBlockState block_nextNameID
      modifyBlockState $ \s -> s { block_nextNameID = x + 1 }
      return x
 
+createVariable :: Identifier -> CompilerState Word16
 createVariable varName =
   do vars <- getBlockState block_names
      case Map.lookup varName vars of
        Nothing -> newVariable varName
        Just x -> return $ x
 
+newVariable :: Identifier -> CompilerState Word16
 newVariable name =
   do vId <- freshVariableId
      vars <- getBlockState block_names
      modifyBlockState $ \s -> s { block_names = Map.insert name vId vars }
      return vId
 
+nestedBlock :: CompilerState a -> CompilerState a
 nestedBlock computation = do
   -- save the old state
   oldState <- getBlockState id
@@ -155,6 +165,7 @@ nestedBlock computation = do
 
 {-- =========== ASSEMBLE ============ --}
 -- main purpose of this function is to fix jump targets
+assemble :: CompilerState ()
 assemble = do
   lblMap <- getBlockState block_labelMap
   code <- fmap reverse (getBlockState block_instructions)
@@ -189,19 +200,21 @@ computeTarget target instrIndex instr@(Instruction opcode _) =
 
 {-- =========== ASSEMBLE ============ --}
 
+compileTopLevel :: [Term] -> CompilerState ()
 compileTopLevel xs =
-  do mapM compile xs
+  do mapM_ compile xs
      returnNone
      assemble
 
+returnNone :: CompilerState ()
 returnNone =
   do noneId <- createConstant PyNone
      emitCodeArg LOAD_CONST noneId
      emitCodeNoArg RETURN_VALUE
 
-
+compile :: Term -> CompilerState ()
 compile (Array elements) =
-  do mapM compile elements
+  do mapM_ compile elements
      emitCodeArg BUILD_LIST (fromIntegral (length elements))
   
 --- small optimization, but XXX: is it true?
@@ -251,7 +264,7 @@ compile (BinaryOp Or e1 e2) = do
   compile e2
   assignLabel end
      
-compile node@(BinaryOp op e1 e2) =
+compile node@(BinaryOp op _ _) =
   if isArith op then
     compileArith node
   else
@@ -271,7 +284,6 @@ compile (Let k e) = do
   emitCodeArg STORE_NAME vId
 
 compile (Var k) = do
-  s <- getBlockState block_names
   res <- searchVariable k
   case res of
     Just (typ, x) -> emitReadVar typ x
@@ -292,27 +304,42 @@ compile (If cond thn els) = do
 -- 333: Py3k incompatibily, print is a function, so it should be loaded and
 -- called like any other functions.
 compile (FunApp (Var "print") args) = do
-  mapM compile args
+  mapM_ compile args
   emitCodeNoArg PRINT_ITEM
 
 compile (FunApp (Var fname) args) = do
   fns <- getBlockState block_functions
   case Map.lookup fname fns of
     Just fnObj -> emitFunctionCall fname fnObj args
-    Nothing -> {- here, we don't have the function ready, but
-                  it could be a variable, binded with let x = foo; or
-                  it could be defined after. -}
-      do (typ, x) <- getVariable fname
-         emitReadVar typ x
-         mapM compile args
-         emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
+    Nothing ->
+      -- In this case, the function is not yet defined, therefore it's not
+      -- in the current block. Moreover, it could be a variable, bound with
+      -- let x = function. However, thanks to the passes, we have all
+      -- the defined functions in a list. We do some basic checks (such as
+      -- check that the number of arguments is correct).
+      do defs <- gets cDefinitions
+         case Map.lookup fname defs of
+           Just def ->
+             if isPrime def then
+               emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
+             else
+               if (length args) /= (numArgs def) then
+                 error $ "ERROR: function " ++ fname ++ " was called with " ++ 
+                 (show $ length args) ++ " but needs " ++
+                 (show $ numArgs def)
+               else 
+                 do (typ, x) <- getVariable fname
+                    emitReadVar typ x
+                    mapM_ compile args
+                    emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
+           Nothing -> error $ "unknown function " ++ fname
 
 compile (FunApp term args) =
   do case term of
        (UnaryOp Prime _) -> do compile term
                                emitCodeArg CALL_FUNCTION 0
        _ -> do compile term
-               mapM compile args
+               mapM_ compile args
                emitCodeArg CALL_FUNCTION (fromIntegral (length args))
 
 compile (Defun fname fargs body) = do
@@ -342,6 +369,7 @@ createFunction fname args isPrime = do
   modifyBlockState $ \s -> s { block_functions = Map.insert fname fobj oldFuns }
   return fId
 
+makeObject :: [Identifier] -> CompilerState PyType
 makeObject fargs = do
   instr <- getBlockState block_instructions
   cnst <- getBlockState block_constants
@@ -409,12 +437,14 @@ createGlobalVariable name = do
   modifyBlockState $ \s -> s { block_names = Map.insert name gId names }
   return gId
 
+isArith :: BOperation -> Bool
 isArith Add = True
 isArith Subtract = True
 isArith Multiply = True
 isArith Divide = True
 isArith _ = False
 
+compileArith :: Term -> CompilerState ()
 compileArith (BinaryOp op e1 e2) =
   do compile e1
      compile e2
@@ -425,6 +455,7 @@ compileArith (BinaryOp op e1 e2) =
            emitOp Divide = BINARY_TRUE_DIVIDE
            emitOp _ = error "compileArith: operation not valid"
 
+compileComparison :: Term -> CompilerState ()
 compileComparison (BinaryOp op e1 e2) =
   do compile e1
      compile e2
@@ -436,6 +467,7 @@ compileComparison (BinaryOp op e1 e2) =
         opKind Greater = 4
         opKind GEQ = 5
 
+emitFunctionCall :: String -> Function -> [Term] -> CompilerState ()
 emitFunctionCall fname fnObj args = 
     if fun_isPrime fnObj then
         emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
@@ -445,9 +477,10 @@ emitFunctionCall fname fnObj args =
                 (show $ length args) ++ " but needs " ++
                 (show $ fun_numArgs fnObj)
         else do emitReadVar (fun_type fnObj) (fun_location fnObj)
-                mapM compile args
+                mapM_ compile args
                 emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
 
+getVariable :: Identifier -> CompilerState (VarType, Word16)
 getVariable name = do
   res <- searchVariable name
   (typ, x) <- case res of
@@ -456,6 +489,7 @@ getVariable name = do
                   return (Global, gId)
   return (typ, x)
 
+compileAgenda :: [Term] -> Term -> CompilerState ()
 compileAgenda arrExpr idxExpr =
   -- we compile the agenda version of At with an if expression
   -- ([f, g]@k)(n) ==> let h = if k == 0 then f else g; h(n);
@@ -467,7 +501,8 @@ compileAgenda arrExpr idxExpr =
            (arrExpr !! 0)
            (arrExpr !! 1))
 
-compileAt arrExpr@(Array elems) idxExpr = do
+compileAt :: Term -> Term -> CompilerState ()
+compileAt arrExpr@(Array _) idxExpr = do
   compile arrExpr
   compile idxExpr
   emitCodeNoArg BINARY_SUBSCR
@@ -477,17 +512,20 @@ compileAt arrExpr@(Array elems) idxExpr = do
           compile idxExpr
           emitCodeNoArg BINARY_SUBSCR -}
 
+searchFunction :: Identifier -> CompilerState (Maybe Function)
 searchFunction k = do
   fns <- getBlockState block_functions
   return $ Map.lookup k fns
 
+isFunction :: Term -> Bool
 isFunction (BinaryOp _ _ _) = False
 isFunction (UnaryOp Prime _) = True
 isFunction (UnaryOp _ _) = False
-isFunction (Var k) = True -- XXX: not true
+isFunction (Var _) = True -- XXX: not true
 isFunction (FunApp _ _) = False
 isFunction (Defun _ _ _) = False
 
+compileAnonFunction :: Term -> Term -> CompilerState ()
 compileAnonFunction f1 f2 = do
   compBody <- nestedBlock $
               (do modifyBlockState $
@@ -497,3 +535,4 @@ compileAnonFunction f1 f2 = do
                   assemble
                   makeObject ["x"])
   compileClosure (PyString { string="lambda" }) compBody ["x"]
+

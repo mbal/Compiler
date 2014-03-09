@@ -1,29 +1,17 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, RecordWildCards, MultiParamTypeClasses, FlexibleContexts, NoMonomorphismRestriction #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, MultiParamTypeClasses #-}
 module Definition (pass) where
-import Data.Maybe (mapMaybe)
-import Control.Monad.Reader
 import Control.Monad.State
-import Control.Applicative (Applicative, (<*>))
-import Data.Traversable
+import Control.Monad.Reader()
+import Control.Applicative (Applicative)
 import Data.List
 import qualified Data.Map as Map
-import Debug.Trace
 
 import Types
 import Parser
 
-
 data Result = Yes | No | Unk
             deriving (Show, Eq)
-
-data Definition = FunDcl { numArgs :: Int
-                         , vtype :: VarType
-                         , dname :: String
-                         , isPrime :: Bool }
-                  | VarDcl { dname :: String }
-                  deriving (Show)
-
-data CollectDef = CollectDef { definitions :: [Definition]
+data CollectDef = CollectDef { definitions :: Map.Map String Definition
                              , equivalences :: Map.Map String [String]
                              }
                 deriving (Show)
@@ -31,69 +19,69 @@ data CollectDef = CollectDef { definitions :: [Definition]
 newtype Def a = Def { runDef :: State CollectDef a }
               deriving (Functor, Applicative, Monad, MonadState CollectDef) 
 
-zeroState = CollectDef { definitions = []
+zeroState :: CollectDef
+zeroState = CollectDef { definitions = Map.empty
                        , equivalences = Map.empty
                        }
 
-pass = undefined
+pass :: [Term] -> Map.Map String Definition
+pass ast = definitions (execState (runDef (collectDefinitions ast)) zeroState)
 
-main = execState
-       (runDef
-        (collectDefinitions $
-         parseAST "let bar= foo; function foo(a,b) = a + b; let baz = bar;"))
-       zeroState
-
+collectDefinitions :: [Term] -> Def ()
 collectDefinitions ts = do
-  Control.Monad.State.mapM_ p1 ts
+  mapM_ p1 ts
   propagateDefinitions
 
-memb2 _ [] = False
-memb2 x (y:ys) = if (x == y) then True else (memb2 x ys)
-
+propagateDefinitions :: Def ()
 propagateDefinitions = do
   graph <- gets equivalences
   defs <- gets definitions
   let v = inferTypes defs (Map.toList graph)
-  traceShow v $ do
-  modify $ \s -> s { definitions = [] }
+  modify $ \s -> s { definitions = v }
 
+findFirstCommon :: Eq a => [a] -> [a] -> Maybe a
 findFirstCommon l1 l2 =
   let int = intersect l1 l2 in
       if length int > 0 then Just (int !! 0) else Nothing
 
+keys :: [(k, v)] -> [k]
 keys [] = []
 keys ((v, _):cs) = v : (keys cs)
 
-inferTypes :: [Definition] -> [(String, [String])] -> [Definition]
+inferTypes :: Map.Map String Definition -> [(String, [String])] ->
+              Map.Map String Definition
 inferTypes d [] = d
-inferTypes definitions lst@((v, eqvs):cs) =
-  let maybeDef = (findFirstCommon (keys lst) (map dname definitions)) in
+inferTypes definitions lst@((_, eqvs):cs) =
+  let maybeDef = findFirstCommon (keys lst) (Map.keys definitions) in
   case maybeDef of
     Just defName -> 
       -- get actual definition
-      let defm = lookup defName (zip (map dname definitions) definitions) in
+      let defm = Map.lookup defName definitions in
       case defm of
         Just def ->
           -- propagation phase
-          let newDefs = map (\x -> def { dname = x }) eqvs in
-          inferTypes (newDefs ++ definitions) cs
+          let df = putAllInMap eqvs def definitions in
+          inferTypes df cs
     Nothing -> error $ "can't infer!"
 
+putAllInMap [] _ r = r
+putAllInMap (k:ks) value oldMap =
+  putAllInMap ks value (Map.insert k value oldMap)
+
 p1 :: Term -> Def ()
-p1 (Defun fname args body) =
+p1 (Defun fname args _) =
   do oldDef <- gets definitions
      let fobj = (FunDcl { numArgs = length args
-                           , vtype = Global
-                           , dname = fname
-                           , isPrime = False })
-     modify $ \s -> s { definitions = fobj : oldDef }
+                        , vtype = Global
+                        , isPrime = False })
+     modify $ \s -> s { definitions = Map.insert fname fobj oldDef }
 
 p1 ins@(Let lname expr) =
   case isFunction expr of
     Yes -> -- here, we are sure that the expression denotes a function.
            -- this happens in two situations: special forms and prime.
       do oldDef <- gets definitions
-         modify $ \s -> s { definitions = (createFunObj ins) : oldDef }
+         modify $ \s -> s { definitions = Map.insert lname (createFunObj ins) oldDef }
     No -> return ()
     Unk ->
       {- this case is the most interesting: we don't know whether the
@@ -105,26 +93,27 @@ p1 ins@(Let lname expr) =
          case Map.lookup lname eqvs of
            Nothing -> modify $ \s -> s {
              equivalences = Map.insert (getEquiv expr) [lname] eqvs }
-           Just ks -> -- we already have some name equivalent to this
+           Just _ -> -- we already have some name equivalent to this
              -- binding, so we have to update the table.
              modify $ \s -> s { equivalences = Map.adjust
                                                (\x -> lname : x)
                                                (getEquiv expr) eqvs } 
+
+p1 _ = do return ()
 
 getEquiv :: Term -> Identifier
 getEquiv (Var v) = v
 getEquiv _ = undefined
 
 createFunObj :: Term -> Definition
-createFunObj (Let name expr) =
+createFunObj (Let _ expr) =
   FunDcl { numArgs = computeNumArgs expr,
            vtype = Fast,
-           dname = name,
            isPrime = computeIsPrime expr }
                           
 isFunction :: Term -> Result
 isFunction (UnaryOp Prime _) = Yes
-isFunction (Var x) = Unk
+isFunction (Var _) = Unk
 isFunction _ = No
 
 computeNumArgs :: Term -> Int

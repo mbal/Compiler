@@ -42,10 +42,18 @@ type VarSet = Set.Set Identifier
 
 emptyVarSet = Set.empty
 
+data Definition = FunDcl { numArgs :: Int
+                         , vtype :: VarType
+--                         , dname :: String
+                         , isPrime :: Bool }
+                  | VarDcl {  }
+                  deriving (Show)
+
 data CState = CState {
   cMagic :: Word32
   , cBlock :: !CodeBlock
   , cFilename :: String
+  , cDefinitions :: Map.Map String Definition
   } deriving (Show)
 
 data VarType = Global | Fast | Deref | Name

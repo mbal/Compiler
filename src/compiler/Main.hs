@@ -4,7 +4,8 @@ import Control.Monad.State
 import Emit
 import Compiler
 import Parser
-import Definition
+import Types
+import qualified Definition as Def
 
 desugar :: a -> a
 desugar = id
@@ -12,8 +13,9 @@ desugar = id
 main :: IO ()
 main = do
   ast <- getASTFromFile "ex.x"
-  let annast = id ast
-      desugr = desugar annast
+  let definition = Def.pass ast
+      desugr = desugar ast
       compiled = compileTopLevel desugr
-  Emit.writeFile (execState (runCompilerState compiled) initState)
+      state = initState { cDefinitions = definition }
+  Emit.writeFile (execState (runCompilerState compiled) state)
     "c:\\users\\utente\\desktop\\out.pyc"
