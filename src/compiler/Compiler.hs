@@ -535,4 +535,3 @@ compileAnonFunction f1 f2 = do
                   assemble
                   makeObject ["x"])
   compileClosure (PyString { string="lambda" }) compBody ["x"]
-
