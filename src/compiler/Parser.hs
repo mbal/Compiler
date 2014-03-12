@@ -11,7 +11,6 @@ data BOperation = Add
                 | Subtract
                 | Multiply
                 | Divide
-                | At
                 | Greater
                 | Lesser
                 | Equal  
@@ -20,6 +19,7 @@ data BOperation = Add
                 | LEQ
                 | And
                 | Or
+                | At
                 deriving (Show, Eq)
 
 data UOperation = Minus
@@ -42,7 +42,7 @@ data Term = Var Identifier -- variable definition
 
 type Identifier = String
 
-data SFKind = Hook | Gerund | Compose
+data SFKind = Hook | Compose
             deriving (Show, Eq)
 
 data Value = Number Integer
@@ -63,7 +63,7 @@ languageDef =
                                      , "else"
                                      , "true"
                                      , "false"
-                                     , "nil"]
+                                     , "nil" ]
            , Token.reservedOpNames = [ "+", "-", "'", "*", "/", "=", "@"
                                      , "<", ">", "<=", ">=", "==", "."
                                      , "and", "or", "not" ]
@@ -80,12 +80,17 @@ parens     = Token.parens     lexer -- parses surrounding parenthesis:
                                     -- uses p to parse what's inside them
 integer    = Token.integer    lexer -- parses an integer
 semi       = Token.semi       lexer -- parses a semicolon
+colon = Token.colon lexer
 whiteSpace = Token.whiteSpace lexer -- parses whitespace
 stringLiteral     = Token.stringLiteral lexer
 angles = Token.angles lexer
+braces = Token.braces lexer
+
 
 brackets = Token.brackets lexer
 comma = Token.comma lexer
+dot = Token.dot lexer
+symbol = Token.symbol lexer
 
 nil = do reserved "none"
          return $ Const Nil
@@ -113,38 +118,24 @@ parser = do
 
 expression = ifExpression
              <|> functionDefinition
-             <|> arithExpression
+             <|> (try lambda)
              <|> specialForm
+             <|> arithExpression
 
-specialForm = do
-  c <- angles functional
-  return $ SpecialForm Hook c
+specialForm = braces functional
 
 functional = hook
 
-hook = 
-  try (do v <- gerund
-          reserved ","
-          vs <- hook
-          return $ v ++ vs)
-  <|> (do v <- gerund
-          return $ v)
-
-gerund = 
-  try (do f <- compose
-          reserved "?"
-          gs <- gerund
-          return $ [SpecialForm Gerund (f ++ gs)])
-  <|> (do v <- compose
-          return $ v)
+hook = do v <- sepBy compose comma
+          return $ SpecialForm Hook v
 
 compose = 
   try (do f <- fun
-          reserved "."
+          dot
           gs <- compose
-          return $ [SpecialForm Compose (f:gs)])
+          return $ SpecialForm Compose (f : [gs]))
   <|>  (do f <- fun
-           return $ [f])
+           return $ f)
 
 fun = function <|> specialForm
 
@@ -179,7 +170,7 @@ functionDefinition =
   do reserved "function"
      name <- identifier
      parameters <- parens formalParams
-     reserved "="
+     symbol "="
      body <- expression
      return $ Defun name parameters body
 
@@ -200,7 +191,7 @@ ifExpression =
 letBinding =
   do reserved "let"
      name <- identifier
-     reserved "="
+     symbol "="
      value <- expression
      return $ Let name value
 
@@ -221,11 +212,11 @@ aOperators = [ [ prefix "-" (UnaryOp Minus) ]
              , [ prefix "+" (UnaryOp Plus) ]
              , [ prefix "not" (UnaryOp Not) ]
              , [ postfix "'" (UnaryOp Prime) ]
-             , [ binary "@" (BinaryOp At) AssocLeft ]
              , [ binary "*" (BinaryOp Multiply) AssocLeft,
                  binary "/" (BinaryOp Divide) AssocLeft ]
              , [ binary "+" (BinaryOp Add) AssocLeft,
                  binary "-" (BinaryOp Subtract) AssocLeft ]
+             , [ binary "@" (BinaryOp At) AssocNone ] 
              , [ binary ">" (BinaryOp Greater) AssocNone,
                  binary "<" (BinaryOp Lesser) AssocNone,
                  binary "<=" (BinaryOp LEQ) AssocNone,
@@ -250,6 +241,14 @@ parseString str =
   case parse parser "" str of
     Left e -> error $ show e
     Right r -> r
+
+defs = lambda <|> functionDefinition
+
+lambda =
+  braces (do args <- formalParams
+             colon
+             body <- expression
+             return $ (Defun "anon" args body))
 
 parseAST = parseString
 
