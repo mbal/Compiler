@@ -9,7 +9,8 @@ import Debug.Trace
 import Data.Char
 import qualified Data.Map as Map
 
-import Parser (Term(..), BOperation(..), UOperation(..), Identifier, Value(..))
+import Parser (Term(..), BOperation(..), UOperation(..), Identifier,
+               Value(..), SFKind(..))
 import Bytecode
 import Emit
 import Types
@@ -368,7 +369,22 @@ compile (Defun fname fargs body) = do
   vId <- createFunction fname (length fargs) False
   emitCodeArg STORE_NAME vId
 
+compile (SpecialForm Hook exps) =
+  handleTrain exps
+  
+compile (SpecialForm Compose exps) = undefined
 
+handleTrain exps =
+  if (length exps `rem` 2) == 0 then
+    handleHook exps
+  else
+    handleFork exps
+
+handleHook h = error $ (show h)
+
+handleFork (f:g:[h]) =
+  compile (Defun "fork" ["x"] (FunApp g [FunApp f [Var "x"],
+                                         FunApp h [Var "x"]]))
 
 createFunction :: String -> Int -> Bool -> CompilerState Word16
 createFunction fname args isPrime = do
