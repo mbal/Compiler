@@ -1,9 +1,5 @@
-factorial : int -> int
 function factorial(n) =
    if n == 0 then 1 else n * factorial(n-1);
-
-function foo(a, b):
-    if b == 0 then return a else return a + b
 
 /*function fact2(n) = factIter(n, 0)
    where factIter(n, acc) =
@@ -20,7 +16,6 @@ function fibo(n) =
        fibo(n-1) + fibo(n-2);
 
 print(factorial(10));
-
 print(fibo(10));
 
 let foo = factorial;
