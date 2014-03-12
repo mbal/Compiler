@@ -109,34 +109,52 @@ function (if we choose to use that notation for lambdas).
 
 ## Lambdas (anonymous functions)
 
-The `'` (prime) operator is a suffix that transform constants in
-(anonymous) functions that return said constant. `1' == lambda: 1`.
-It's similar to FL's `~` operator, except that `~` is prefix.
+To introduce an anonymous function, we can use: `{args: exp}`. Note
+that `:` is mandatory, even if the lambda accept no arguments.
+`{: 4}` is the anonymous function that returns 4.
+`{x, y: x + y}` is the anonymous function that returns the sum of its
+arguments.
+Lambda introduce closure over their enclosing function:
 
-The main problem with this approach is how to allow the call of the
-primed function with any number of arguments. The simplest way to
-solve it is to use Python's *args, but it will be slower (you have to
-compile the arguments and push them on the stack).
-Solving the problem at compile time is tricky: there are two situations
-in which a @ is used:
+    function foo(a, b, c) =
+        {x: a * x * x + b * x + c}
 
-* `let k = [a', g]@cond; k(arg1, arg2, ...)`
-* `(([a', g])@cond)(arg1, arg2, ...)`
+`foo` returns a function that evaluates polynomials.
 
-The second case is probably solvable; but the first cannot be solved
-easily: it's impossible to know at compile time whether `k` is the
-primed constant or the function.
+Another concept is the special form. A special form is enclosed in `{`
+and `}` (like a lambda), but has a slightly different semantics: it
+composes existing functions, and it basically syntactic sugar.
 
-To introduce an anonymous function, we can either use:
-* `{arg1, arg2, ... argn: exp}`, however, this makes difficult or a
-  bit ugly adding type annotations: `{x:int, y:string -> string: string(x) + y}`
-* `{x, y (int string -> string): string(x) + y}` --> acceptable
-* `{int x, string y: string string(x) + y}` --> ugly
-* `{x^int, y^int: string(x) + y}^string` --> not very nice
-* `(int, string -> string){x, y: string(x) + y}` --> has the plus that
-  is very easy to make the signature optional.
-* `{x, y: string(x) + y} as int string -> string` something like Haskell's.
-        function foo(x, y) as int string -> string -> int =
-            {y: x}
-   This notation is easy and quite nice to extend in case of
-   non-anonymous function.
+There are two categories of special forms:
+
+* trains
+* and composition
+
+### Composition
+
+The composition special form is a special form to denote function
+composition; in the general case, it's:
+`{f1 . f2 . ... fk}`, the `.` (dot) operator is associative to the
+right, so it's equivalent to: `{x: f1(f2(...fk(x)))}`.
+
+### Train
+Trains are taken from the J programming language, with some minor
+syntactic differences.
+
+A train is a sequence of functions, separated by `,`. There are 3 trains:
+* the hook. A hook is in the form: `{f, g}` (two functions), and it's
+  equivalent to: `{x: f(x, g(x))}`. `{mul dec}(k)` returns `k * (k -1)`
+
+* the fork. The fork is in the form `{f, g, h}` (three functions), and
+  it's equivalent to: `{x: g(f(x), h(x))}`. For example,
+  `{sum div len}([1,2,3])` is the average of the array (2). For two
+  arguments (dyad) function, it would be nice to have
+  `{f, g, h} == {x, y: g(f(x, y), h(x, y))}`. This can be enforced at
+  compile time, probably.
+
+* the generic train `{f1, f2, ... fk}`. In general, longer trains are
+  decomposed in hooks and forks.
+  If there is an even number of functions,
+  `{f1, f2, ... fk}` is the hook between `f1` and `{f2, ... fk}`
+  If there is an odd number:
+  `{f1, f2, ... fk}` is the fork: `{f1, f2, {f3, ... fk}}`.
