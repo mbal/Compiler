@@ -1,4 +1,10 @@
 # Examples of X
+
+## Factorial (so, IF and FUNCALL)
+The factorial example was choosen because it's simple, but, at the
+same time, it allows to get a feel of the language, since it contains
+conditionals, function applications, and some basic operations.
+
 Probably none of this examples will work right now (or ever): they're
 just an idea of what I want for X.
 The most basic program is:
@@ -23,7 +29,7 @@ composition, but they don't add anything: the angles notation, needed
 to avoid ambiguities, clutters the definition.
 
     function fact(n) =
-        ([1, (mul fact . dec)] @ (n > 0))(n);
+        ([1, (mul fact . dec)] @ (n > 0))(n); // (X)
 
 Is nicer, but terribly ambiguous: is `mul fact . dec` equivalent to
 `mul (fact . dec)`? This second form is a lot like a function
@@ -54,70 +60,83 @@ convinced, because it needs more characters. This could seem a
 nitpick, but it's not: basically, if the arguments for the function
 are enclosed in parenthesis, then `:` is noise.
 
+    function fact(n) =
+        if n == 0 then 1 else hook(mul, compose(fact, dec))(n)
+
+In the next few examples I'll use a lisp like syntax, in order to make
+the transformations clearer.
+
+    (function fact [n]
+        (if (= n 0)
+            1
+            (* n (fact (- n 1)))))
 
 
+    (function fact [n]
+        (if (= n 0)
+            1
+            ((lambda(x) (* x (fact (- x 1)))) n)))
 
-Probably none of this example will work right now: they're just an
-idea of what I want for X.
+    (function fact [n]
+        (if (= n 0)
+            1
+            ({x: (* x (fact (- x 1)))} x))) // {x: ...} == (lambda (x) ...)
+            // is a nice shorthand, but it looks like a set comprehension :(
 
     function fact(n) =
-        if n == 0 then 1 else n * fact(n-1)
+        if n == 0 then 1 else {x: (x * fact(x-1))}(n);
 
-Using the agenda operator and a hook:
+    (function fact [n]
+        (if (= n 0)
+            1
+            ((<* {x: fact (- x 1)}>) n))) // very unclear: too many symbols
 
-    function fact(n) = ([1', (* fact . dec)] @ (n > 0))(n)
-    
-    function dec(k) = k - 1
+    (function fact [n]
+        (if (= n 0)
+            1
+            ((<*, <fact . dec>>) n))) // a bit better
 
-Or, equivalently, using the hook (f g)(x) = f(k, g(k)). Unluckily, if
-we introduce a hook, we open up some ambiguities in the grammar, for
-example:
-`(h f . g)` is parsed as `(Hook h (Compose f g))`, but
-`(h (f . g))` is parsed as `h(f . g)`.
-The problem is, the second interpretation may be correct, sometimes.
+    function factA(n) =
+        if n == 0 then 1 else <*, <fact.dec>>(n); // OR, define a priority ==>
 
-An alternative notation I considered is `? f g` (or the infix
-`f ? g`, even though the question mark is kind of misleading, it may
-seem a conditional, but it's the symbol that most resembles an hook).
-Another approach is to change the application notation, using some
-FL-like syntax, for example `f:(arg1, arg2, ...)`. This slight
-modification would solve the problem, but I am not too convinced.
+    function factB(n) =
+        if n == 0 then 1 else {*, fact . dec}(n);
 
-`'` is a suffix that transforms constants in (anonymous) functions
-that return the constant. `1' === function 1'() = 1`. It's similar to
-FL's `~` operator, except that `~` is prefix.
+I kind of like the last and the penultimate. While `factA` is easier
+to parse as the priority is specified using `<` and `>`, `factB` makes
+clear that the expression `*, fact . dec` is just an anonymous
+function (if we choose to use that notation for lambdas).
 
-To solve the ambiguity problem, we employed the concepts of special
-forms: in X, a special form is a expression enclosed in `<` and `>`.
-Special forms are a way to define a new function, composing existing
-functions. 
-* `<f, g>(x)` which means f(x, g(x))
-* `<f . g . h ... >` represents the composition
-* `<f ? g ? h ...>` is a conditional, which executes the function corresponding to the indexing expression supplied.
+## Lambdas (anonymous functions)
+
+The `'` (prime) operator is a suffix that transform constants in
+(anonymous) functions that return said constant. `1' == lambda: 1`.
+It's similar to FL's `~` operator, except that `~` is prefix.
 
 The main problem with this approach is how to allow the call of the
 primed function with any number of arguments. The simplest way to
-solve it is to use Python's *args, but it will be needlessly slow.
+solve it is to use Python's *args, but it will be slower (you have to
+compile the arguments and push them on the stack).
 Solving the problem at compile time is tricky: there are two situations
 in which a @ is used:
 
 * `let k = [a', g]@cond; k(arg1, arg2, ...)`
 * `(([a', g])@cond)(arg1, arg2, ...)`
 
-The first case is difficult to treat (impossible, I think), since we
-don't know at compile-time the value of the condition (should we push
-the operands on the stack or not?)
-The second case is simpler because we can translate it as:
+The second case is probably solvable; but the first cannot be solved
+easily: it's impossible to know at compile time whether `k` is the
+primed constant or the function.
 
-    if cond == False
-        (a')()
-    else
-        g(arg1, arg2, ...)
-
-And we know if a function is 0-ary (well, varargs). This
-transformation is not trivial, but neither hard. However, we cannot
-apply the translation only sometimes, since it would not be consisted.
-
-The ' operator is a generalization of what is found in J, which
-provides the constants functions _9:, _8:, ... 0:, 1:, ... 9: that
-return the number (from -9 to 9)
+To introduce an anonymous function, we can either use:
+* `{arg1, arg2, ... argn: exp}`, however, this makes difficult or a
+  bit ugly adding type annotations: `{x:int, y:string -> string: string(x) + y}`
+* `{x, y (int string -> string): string(x) + y}` --> acceptable
+* `{int x, string y: string string(x) + y}` --> ugly
+* `{x^int, y^int: string(x) + y}^string` --> not very nice
+* `(int, string -> string){x, y: string(x) + y}` --> has the plus that
+  is very easy to make the signature optional.
+* `{x, y: string(x) + y} as int string -> string` something like Haskell's.
+        function foo(x, y) as int string -> string -> int =
+            {y: x}
+   This notation is easy and quite nice to extend in case of
+   non-anonymous function.
