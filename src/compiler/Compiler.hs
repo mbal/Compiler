@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wall #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving, RecordWildCards, MultiParamTypeClasses #-}
 module Compiler where
 import Control.Monad.Reader
@@ -278,6 +279,18 @@ compile (Const (StringValue s)) = do
   cId <- createConstant (PyString { string = s})
   emitCodeArg LOAD_CONST cId
 
+compile (Const Nil) = do
+  cId <- createConstant PyNone
+  emitCodeArg LOAD_CONST cId
+
+-- 333: possible Py3k incompatibility: True and False are reserved,
+-- so they are probably saved in a different way.
+compile (Const VTrue) = do
+  compile (Const (StringValue "True"))
+
+compile (Const VFalse) = do
+  compile (Const (StringValue "False"))
+
 compile (Let k e) = do
   compile e
   vId <- createVariable k
@@ -355,7 +368,7 @@ compile (Defun fname fargs body) = do
   vId <- createFunction fname (length fargs) False
   emitCodeArg STORE_NAME vId
 
-compile other = error $ "unknown: " ++ (show other)
+
 
 createFunction :: String -> Int -> Bool -> CompilerState Word16
 createFunction fname args isPrime = do
@@ -454,6 +467,7 @@ compileArith (BinaryOp op e1 e2) =
            emitOp Multiply = BINARY_MULTIPLY
            emitOp Divide = BINARY_TRUE_DIVIDE
            emitOp _ = error "compileArith: operation not valid"
+compileArith _ = error "DOMAIN ERROR: compileArith on non-arithmetic operation"
 
 compileComparison :: Term -> CompilerState ()
 compileComparison (BinaryOp op e1 e2) =
@@ -466,6 +480,9 @@ compileComparison (BinaryOp op e1 e2) =
         opKind NotEqual = 3
         opKind Greater = 4
         opKind GEQ = 5
+        opKind _ = error "DOMAIN ERROR: compileComparison applied on non comparison"
+
+compileComparison _ = error "DOMAIN ERROR: compileComparison applied on non comparison"
 
 emitFunctionCall :: String -> Function -> [Term] -> CompilerState ()
 emitFunctionCall fname fnObj args = 
@@ -511,19 +528,21 @@ compileAt arrExpr@(Array _) idxExpr = do
   else do compile arrExpr
           compile idxExpr
           emitCodeNoArg BINARY_SUBSCR -}
+compileAt _ _ = error $ "Domain error on @ operator"
 
 searchFunction :: Identifier -> CompilerState (Maybe Function)
 searchFunction k = do
   fns <- getBlockState block_functions
   return $ Map.lookup k fns
 
-isFunction :: Term -> Bool
+{-isFunction :: Term -> Bool
 isFunction (BinaryOp _ _ _) = False
 isFunction (UnaryOp Prime _) = True
 isFunction (UnaryOp _ _) = False
 isFunction (Var _) = True -- XXX: not true
 isFunction (FunApp _ _) = False
 isFunction (Defun _ _ _) = False
+-}
 
 compileAnonFunction :: Term -> Term -> CompilerState ()
 compileAnonFunction f1 f2 = do
