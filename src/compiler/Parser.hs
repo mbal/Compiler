@@ -37,6 +37,7 @@ data Term = Var Identifier -- variable definition
           | If Term Term Term -- if
           | Let Identifier Term -- let binding
           | Defun Identifier [Identifier] Term
+          | Lambda [Identifier] Term 
           | SpecialForm SFKind [Term]
           deriving (Show, Eq)
 
@@ -230,6 +231,21 @@ aOperators = [ [ prefix "-" (UnaryOp Minus) ]
 prefix name fun = Prefix (do { reservedOp name; return fun })
 postfix name fun = Postfix (do {reservedOp name; return fun })
 binary name fun assoc = Infix (do { reservedOp name; return fun }) assoc
+
+defs = lambda <|> functionDefinition
+
+lambda =
+  braces (do args <- formalParams
+             colon
+             body <- expression
+             return $ (Lambda args body))
+
+imports = do
+  reserved "import"
+  id <- identifier
+  reserved ";"
+  return id
+
 -- function for testing
 parseFile file =
   do program  <- readFile file
@@ -242,20 +258,6 @@ parseString str =
     Left e -> error $ show e
     Right r -> r
 
-defs = lambda <|> functionDefinition
-
-lambda =
-  braces (do args <- formalParams
-             colon
-             body <- expression
-             return $ (Defun "anon" args body))
-
 parseAST = parseString
 
 getASTFromFile = parseFile
-
-imports = do
-  reserved "import"
-  id <- identifier
-  reserved ";"
-  return id

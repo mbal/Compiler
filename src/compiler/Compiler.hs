@@ -5,7 +5,6 @@ import Control.Monad.Reader
 import Control.Monad.State (MonadState, State, put, get, gets, modify)
 import Control.Applicative (Applicative)
 import Data.Word (Word16)
-import Debug.Trace
 import Data.Char
 import qualified Data.Map as Map
 
@@ -293,9 +292,13 @@ compile (Const VFalse) = do
   compile (Const (StringValue "False"))
 
 compile (Let k e) = do
-  compile e
-  vId <- createVariable k
-  emitCodeArg STORE_NAME vId
+  case e of
+    Lambda args _ -> do compile e
+                        fId <- createFunction k (length args) False
+                        emitCodeArg STORE_NAME fId
+    _ -> do compile e
+            vId <- createVariable k
+            emitCodeArg STORE_NAME vId
 
 compile (Var k) = do
   res <- searchVariable k
@@ -369,22 +372,48 @@ compile (Defun fname fargs body) = do
   vId <- createFunction fname (length fargs) False
   emitCodeArg STORE_NAME vId
 
-compile (SpecialForm Hook exps) =
-  handleTrain exps
-  
-compile (SpecialForm Compose exps) = undefined
+compile (Lambda args body) = do
+  oldState <- getBlockState id
+  modify $ \s -> s { cBlock = initBlock }
+  modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction args }
+  compile body
+  emitCodeNoArg RETURN_VALUE
+  assemble
+  compiledBody <- makeObject args
+  modify $ \s -> s { cBlock = oldState }
+  compileClosure (PyString { string="<lambda>" }) compiledBody args
 
+compile (SpecialForm Hook exps) =
+  compile $ handleTrain exps
+  
+compile (SpecialForm Compose exps) =
+  compile $ handleCompose exps
+
+handleCompose ([f, g]) =
+  (Lambda ["x"] (FunApp f [FunApp g [Var "x"]]))
+{-handleCompose (f:rs) =
+  (Lambda ["x"] (FunApp f [handleCompose rs]))-}
+
+handleTrain :: [Term] -> Term
 handleTrain exps =
   if (length exps `rem` 2) == 0 then
     handleHook exps
   else
     handleFork exps
 
-handleHook h = error $ (show h)
+handleHook :: [Term] -> Term
+handleHook (f:[g]) = 
+  (Lambda ["x"] (FunApp f [Var "x", FunApp g [Var "x"]]))
+handleHook (f:gs) =
+  (Lambda ["x"] (FunApp f [Var "x", handleTrain gs]))
 
+handleFork :: [Term] -> Term
 handleFork (f:g:[h]) =
-  compile (Defun "fork" ["x"] (FunApp g [FunApp f [Var "x"],
-                                         FunApp h [Var "x"]]))
+  (Lambda ["x"] (FunApp g [FunApp f [Var "x"],
+                           FunApp h [Var "x"]]))
+handleFork (f:g:hs) =
+  (Lambda ["x"] (FunApp g [FunApp f [Var "x"],
+                           handleTrain hs]))
 
 createFunction :: String -> Int -> Bool -> CompilerState Word16
 createFunction fname args isPrime = do
@@ -529,7 +558,6 @@ compileAgenda arrExpr idxExpr =
   -- ([f, g]@k)    ==> let h = if k == 0 then f else g;
   -- unluckily, neither this approach can solve the problem with the
   -- primed function (that can be called with any number of arguments)
-  traceShow arrExpr $ 
   compile (If (BinaryOp Equal idxExpr (Const (Number 0)))
            (arrExpr !! 0)
            (arrExpr !! 1))

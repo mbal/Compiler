@@ -79,7 +79,7 @@ p1 (Defun fname args _) =
 p1 ins@(Let lname expr) =
   case isFunction expr of
     Yes -> -- here, we are sure that the expression denotes a function.
-           -- this happens in two situations: special forms and prime.
+           -- this happens in two situations: special forms and lambdas.
       do oldDef <- gets definitions
          modify $ \s -> s { definitions = Map.insert lname (createFunObj ins) oldDef }
     No -> return ()
@@ -103,7 +103,7 @@ p1 _ = do return ()
 
 getEquiv :: Term -> Identifier
 getEquiv (Var v) = v
-getEquiv _ = undefined
+getEquiv _ = error "getEquiv"
 
 createFunObj :: Term -> Definition
 createFunObj (Let _ expr) =
@@ -114,11 +114,13 @@ createFunObj (Let _ expr) =
 isFunction :: Term -> Result
 isFunction (UnaryOp Prime _) = Yes
 isFunction (Var _) = Unk
+isFunction (Lambda _ _) = Yes
+isFunction (SpecialForm _ _) = Yes
 isFunction _ = No
 
 computeNumArgs :: Term -> Int
 computeNumArgs (UnaryOp Prime _) = 0
-computeNumArgs _ = undefined
+computeNumArgs (SpecialForm _ _) = 1 -- not very nice.
 
 computeIsPrime :: Term -> Bool
 computeIsPrime (UnaryOp Prime _) = True
