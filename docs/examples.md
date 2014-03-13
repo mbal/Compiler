@@ -109,6 +109,7 @@ function (if we choose to use that notation for lambdas).
 
 ## Lambdas (anonymous functions)
 
+
 To introduce an anonymous function, we can use: `{args: exp}`. Note
 that `:` is mandatory, even if the lambda accept no arguments.
 `{: 4}` is the anonymous function that returns 4.
@@ -124,6 +125,12 @@ Lambda introduce closure over their enclosing function:
 Another concept is the special form. A special form is enclosed in `{`
 and `}` (like a lambda), but has a slightly different semantics: it
 composes existing functions, and it basically syntactic sugar.
+
+### Aside: why the curly?
+The braces are used, in most C-like programming languages to introduce
+a block, as they do in X. In K, curly braces define a lambda expression.
+In math curly brackets often define operators (such as the poisson
+bracket), and in the LTI theory they basically abbreviate a function.
 
 There are two categories of special forms:
 
