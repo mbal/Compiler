@@ -1,7 +1,14 @@
-function div(a,b) = a / b;
-function len(a) = 4;
-function sum(a) = 10;
+function mul(a,b) = a * b;
+function dec(a) = a - 1;
 
-{sum, div, len};
+/*function fact(n) =
+    if n == 0 then 1 else n * ({fact.dec})(n);*/
 
-print(fork([1,2,3,4]));
+function test(x) =
+    dec(dec(x));
+
+let f  = {x : dec ( dec(x))};
+function foo() = {dec . dec};
+print(f(3));
+
+//print(fact(100));

@@ -108,7 +108,7 @@ getEquiv _ = error "getEquiv"
 createFunObj :: Term -> Definition
 createFunObj (Let _ expr) =
   FunDcl { numArgs = computeNumArgs expr,
-           vtype = Fast,
+           vtype = Global,
            isPrime = computeIsPrime expr }
                           
 isFunction :: Term -> Result

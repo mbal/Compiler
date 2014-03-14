@@ -4,7 +4,6 @@ import Data.Word (Word8, Word16, Word32)
 import Control.Monad.Reader
 import Control.Monad.State
 import Data.Char (ord)
-import Debug.Trace
 import Data.List (sortBy)
 import Data.Ord (comparing)
 import qualified Data.ByteString.Lazy as B
@@ -158,22 +157,21 @@ writeCode codeObject =
     writeString PyString { string = "aa" } -- lnotab ??
 
 writeCodeObj obj =
-  traceShow ("writing you code object " ++ (show obj))
-  (do writeU8 $ encodeType CODE
-      writeU32 $ argcount obj
-      writeU32 $ nlocals obj
-      writeU32 $ stackSize obj
-      writeU32 $ 0x43
-      writeString $ code obj
-      writeObject $ consts obj
-      writeObject $ varnames obj
-      writeTuple []
-      writeTuple []
-      writeTuple []
-      writeString PyString { string = "file" }
-      writeString PyString { string = "<main>" }
-      writeU32 1 -- first line of code ??
-      writeString PyString { string = "bb" }) -- lnotab ??
+  do writeU8 $ encodeType CODE
+     writeU32 $ argcount obj
+     writeU32 $ nlocals obj
+     writeU32 $ stackSize obj
+     writeU32 $ 0x43
+     writeString $ code obj
+     writeObject $ consts obj
+     writeObject $ names obj
+     writeObject $ varnames obj
+     writeTuple []
+     writeTuple []
+     writeString PyString { string = "file" }
+     writeString PyString { string = "<main>" }
+     writeU32 1 -- first line of code ??
+     writeString PyString { string = "bb" } -- lnotab ??
 
 writeObject obj =
   case obj of

@@ -128,7 +128,10 @@ specialForm = braces functional
 functional = hook
 
 hook = do v <- sepBy compose comma
-          return $ SpecialForm Hook v
+          if length v > 1 then
+            return $ SpecialForm Hook v
+          else
+            return $ v !! 0
 
 compose = 
   try (do f <- fun

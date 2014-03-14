@@ -14,6 +14,8 @@ import Bytecode
 import Emit
 import Types
 
+import Debug.Trace
+
 initBlock :: CodeBlock
 initBlock = CodeBlock {
   block_instructions = []
@@ -375,7 +377,8 @@ compile (Defun fname fargs body) = do
 compile (Lambda args body) = do
   oldState <- getBlockState id
   modify $ \s -> s { cBlock = initBlock }
-  modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction args }
+  modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction args
+                             , block_name = "<lambda>"}
   compile body
   emitCodeNoArg RETURN_VALUE
   assemble
@@ -390,6 +393,7 @@ compile (SpecialForm Compose exps) =
   compile $ handleCompose exps
 
 handleCompose ([f, g]) =
+  traceShow (Lambda ["x"] (FunApp f [FunApp g [Var "x"]])) $ 
   (Lambda ["x"] (FunApp f [FunApp g [Var "x"]]))
 {-handleCompose (f:rs) =
   (Lambda ["x"] (FunApp f [handleCompose rs]))-}
@@ -428,11 +432,15 @@ createFunction fname args isPrime = do
   return fId
 
 makeObject :: [Identifier] -> CompilerState PyType
-makeObject fargs = do
+makeObject fargs =
+  do
   instr <- getBlockState block_instructions
   cnst <- getBlockState block_constants
-  locals <- getBlockState block_varnames
-  vnames <- getBlockState block_names
+  vnames <- getBlockState block_varnames
+  fnamest <- getBlockState block_functions
+  let fnames = Map.map fun_location fnamest
+  let locals = Map.union vnames fnames
+  bnames <- getBlockState block_names
   bname <- getBlockState block_name
   let obj = PyCode {
                    argcount = fromIntegral (length fargs)
@@ -443,10 +451,10 @@ makeObject fargs = do
                             (concat (map encodeInstruction' instr))
                    , consts = PyTuple $ reverse cnst
                    , varnames = PyTuple $ map PyString (keysOrdered locals)
-                   , names = PyTuple $ map PyString (keysOrdered vnames)
+                   , names = PyTuple $ map PyString (keysOrdered bnames)
                    , name = PyString bname
                    }
-  return obj
+  trace (">" ++ bname ++ "<" ++ (show bnames) ++ (show locals)) $ do return obj
 
 emitWriteVar :: PyType -> CompilerState ()
 emitWriteVar fname = do
