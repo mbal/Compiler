@@ -133,13 +133,11 @@ hook = do v <- sepBy compose comma
           else
             return $ v !! 0
 
-compose = 
-  try (do f <- fun
-          dot
-          gs <- compose
-          return $ SpecialForm Compose (f : [gs]))
-  <|>  (do f <- fun
-           return $ f)
+compose = do v <- sepBy fun dot
+             if length v > 1 then
+               return $ SpecialForm Compose v
+             else
+               return $ v !! 0
 
 fun = function <|> specialForm
 

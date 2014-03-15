@@ -389,8 +389,22 @@ compile (Lambda args body) = do
 compile (SpecialForm Hook exps) =
   compile $ handleTrain exps
   
-compile (SpecialForm Compose exps) =
-  compile $ handleCompose exps
+compile (SpecialForm Compose funcs) = do
+  -- SpecialForm Compose [f1, f2, f3, ...] =
+  --    = \x -> f1(f2(f3(...(x))));
+  let args = ["x"]
+  oldState <- getBlockState id
+  modify $ \s -> s { cBlock = initBlock }
+  modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction args
+                             , block_name = "<lambda>"}
+  mapM_ compile funcs
+  emitCodeArg LOAD_FAST 0
+  replicateM_ (length funcs) (emitCodeArg CALL_FUNCTION 1)
+  emitCodeNoArg RETURN_VALUE
+  assemble
+  compiledBody <- makeObject args
+  modify $ \s -> s { cBlock = oldState }
+  compileClosure (PyString { string="<lambda>" }) compiledBody args
 
 handleCompose ([f, g]) =
   traceShow (Lambda ["x"] (FunApp f [FunApp g [Var "x"]])) $ 
