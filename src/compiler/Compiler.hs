@@ -392,25 +392,7 @@ compile (SpecialForm Hook exps) =
 compile (SpecialForm Compose funcs) = do
   -- SpecialForm Compose [f1, f2, f3, ...] =
   --    = \x -> f1(f2(f3(...(x))));
-  let args = ["x"]
-  oldState <- getBlockState id
-  modify $ \s -> s { cBlock = initBlock }
-  modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction args
-                             , block_name = "<lambda>"}
-  mapM_ compile funcs
-  emitCodeArg LOAD_FAST 0
-  replicateM_ (length funcs) (emitCodeArg CALL_FUNCTION 1)
-  emitCodeNoArg RETURN_VALUE
-  assemble
-  compiledBody <- makeObject args
-  modify $ \s -> s { cBlock = oldState }
-  compileClosure (PyString { string="<lambda>" }) compiledBody args
-
-handleCompose ([f, g]) =
-  traceShow (Lambda ["x"] (FunApp f [FunApp g [Var "x"]])) $ 
-  (Lambda ["x"] (FunApp f [FunApp g [Var "x"]]))
-{-handleCompose (f:rs) =
-  (Lambda ["x"] (FunApp f [handleCompose rs]))-}
+  compile (Lambda ["x"] (foldr1 (\x y -> FunApp x [y]) (funcs ++ [Var "x"])))
 
 handleTrain :: [Term] -> Term
 handleTrain exps =
@@ -468,7 +450,7 @@ makeObject fargs =
                    , names = PyTuple $ map PyString (keysOrdered bnames)
                    , name = PyString bname
                    }
-  trace (">" ++ bname ++ "<" ++ (show bnames) ++ (show locals)) $ do return obj
+  return obj
 
 emitWriteVar :: PyType -> CompilerState ()
 emitWriteVar fname = do
@@ -600,15 +582,6 @@ searchFunction :: Identifier -> CompilerState (Maybe Function)
 searchFunction k = do
   fns <- getBlockState block_functions
   return $ Map.lookup k fns
-
-{-isFunction :: Term -> Bool
-isFunction (BinaryOp _ _ _) = False
-isFunction (UnaryOp Prime _) = True
-isFunction (UnaryOp _ _) = False
-isFunction (Var _) = True -- XXX: not true
-isFunction (FunApp _ _) = False
-isFunction (Defun _ _ _) = False
--}
 
 compileAnonFunction :: Term -> Term -> CompilerState ()
 compileAnonFunction f1 f2 = do
