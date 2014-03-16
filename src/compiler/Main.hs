@@ -14,11 +14,11 @@ desugar = id
 
 main :: IO ()
 main = do
-  ast <- getASTFromFile "ex2.x"
+  ast <- getASTFromFile "ex3.x"
   traceShow ast $ do
-  let definition = Def.pass ast
-      desugr = desugar ast
-      compiled = compileTopLevel desugr
-      state = initState { cDefinitions = definition }
-  Emit.writeFile (execState (runCompilerState compiled) state)
-    "c:\\users\\utente\\desktop\\out.pyc"
+    let --definition = Def.pass ast
+        desugr = desugar ast
+        compiled = compileTopLevel desugr
+        state = initState
+    Emit.writeFile (execState (runCompilerState compiled) state)
+      "c:\\users\\utente\\desktop\\out.pyc"

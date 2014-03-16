@@ -9,8 +9,6 @@ import qualified Data.Map as Map
 import Types
 import Parser
 
-data Result = Yes | No | Unk
-            deriving (Show, Eq)
 data CollectDef = CollectDef { definitions :: Map.Map String Definition
                              , equivalences :: Map.Map String [String]
                              }
@@ -68,12 +66,14 @@ putAllInMap [] _ r = r
 putAllInMap (k:ks) value oldMap =
   putAllInMap ks value (Map.insert k value oldMap)
 
+
 p1 :: Term -> Def ()
-p1 (Defun fname args _) =
+p1 (Defun fname args body) =
   do oldDef <- gets definitions
      let fobj = (FunDcl { numArgs = length args
                         , vtype = Global
-                        , isPrime = False })
+                        , isPrime = False
+                        , higherOrder = isFunction body})
      modify $ \s -> s { definitions = Map.insert fname fobj oldDef }
 
 p1 ins@(Let lname expr) =
@@ -103,19 +103,21 @@ p1 _ = do return ()
 
 getEquiv :: Term -> Identifier
 getEquiv (Var v) = v
-getEquiv _ = error "getEquiv"
+getEquiv (FunApp (Var x) _) = x
 
 createFunObj :: Term -> Definition
 createFunObj (Let _ expr) =
   FunDcl { numArgs = computeNumArgs expr,
            vtype = Global,
-           isPrime = computeIsPrime expr }
+           isPrime = computeIsPrime expr
+         , higherOrder = isFunction expr}
                           
 isFunction :: Term -> Result
 isFunction (UnaryOp Prime _) = Yes
 isFunction (Var _) = Unk
 isFunction (Lambda _ _) = Yes
 isFunction (SpecialForm _ _) = Yes
+isFunction (FunApp f _) = Unk
 isFunction _ = No
 
 computeNumArgs :: Term -> Int

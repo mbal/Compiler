@@ -342,7 +342,11 @@ compile (FunApp (Var fname) args) = do
       -- let x = function. However, thanks to the passes, we have all
       -- the defined functions in a list. We do some basic checks (such as
       -- check that the number of arguments is correct).
-      do defs <- gets cDefinitions
+      do (typ, x) <- getVariable fname
+         emitReadVar typ x
+         mapM_ compile args
+         emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
+      {-do defs <- gets cDefinitions
          case Map.lookup fname defs of
            Just def ->
              if isPrime def then
@@ -357,7 +361,7 @@ compile (FunApp (Var fname) args) = do
                     emitReadVar typ x
                     mapM_ compile args
                     emitCodeArg CALL_FUNCTION (fromIntegral $ length args)
-           Nothing -> error $ "unknown function " ++ fname
+           Nothing -> error $ "unknown function " ++ fname -}
 
 compile (FunApp term args) =
   do case term of
