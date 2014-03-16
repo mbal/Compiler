@@ -1,8 +1,9 @@
+{-# OPTIONS_GHC -Wall #-}
 module Types where
 import Data.Word
 import qualified Data.Map as Map
 import qualified Data.Set as Set
-import Parser (Term(..), BOperation(..), Identifier)
+import Parser (Identifier)
 import Bytecode
 
 {- An instruction in the Python Bytecode is:
@@ -40,6 +41,7 @@ type VariableID = Word16
 type LabelID = Word16
 type VarSet = Set.Set Identifier
 
+emptyVarSet :: Set.Set a
 emptyVarSet = Set.empty
 
 data Definition = FunDcl { numArgs :: Int

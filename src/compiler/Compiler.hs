@@ -1,5 +1,7 @@
 {-# OPTIONS_GHC -Wall #-}
-{-# LANGUAGE GeneralizedNewtypeDeriving, RecordWildCards, MultiParamTypeClasses #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving, RecordWildCards #-}
+{-# LANGUAGE MultiParamTypeClasses #-}
+
 module Compiler where
 import Control.Monad.Reader
 import Control.Monad.State (MonadState, State, put, get, gets, modify)
@@ -59,13 +61,16 @@ emitCode inst = do
   labels <- getBlockState block_labelsForNextInstruction
   offset <- getBlockState block_instructionOffset
   --labelMap <- getBlockState block_labelMap
+  -- XXX: we should compute the line number of the instruction, to get
+  -- precise exceptions.
   modifyBlockState $ \s -> s { block_labelsForNextInstruction = [] }
   forM_ labels (\x -> updateLabelMap x offset)
   oldInstructions <- getBlockState block_instructions
   let annotatedInstruction = AugInstruction inst offset
   modifyBlockState $
     \s -> s { block_instructions = annotatedInstruction : oldInstructions
-            , block_instructionOffset = offset + (instructionSize inst) }
+            , block_instructionOffset = offset +
+                                        fromIntegral (instructionSize inst) }
 
 updateLabelMap :: LabelID -> Word16 -> CompilerState ()
 updateLabelMap label index = do
@@ -197,9 +202,9 @@ fixJump mp augInstr@(AugInstruction (Instruction opcode arg) index) =
 computeTarget :: Word16 -> Word16 -> Instruction -> Word16
 computeTarget target instrIndex instr@(Instruction opcode _) =
   if isRelativeJump opcode then
-    fromIntegral (target - (instrIndex + (instructionSize instr)))
+    (target - (instrIndex + (fromIntegral $ instructionSize instr)))
   else
-    fromIntegral target
+    target
 
 {-- =========== ASSEMBLE ============ --}
 
@@ -310,6 +315,7 @@ compile (Var k) = do
                   emitReadVar Global gId
   
 compile (If cond thn els) = do
+  -- XXX: can be optimized. (e.g. cond is an immediate)
   compile cond
   flsLabel <- newLabel
   endLabel <- newLabel
@@ -375,25 +381,26 @@ compile (Defun fname fargs body) = do
   emitCodeArg STORE_NAME vId
 
 compile (Lambda args body) = do
-  oldState <- getBlockState id
-  modify $ \s -> s { cBlock = initBlock }
-  modifyBlockState $ \s -> s { block_varnames = computeLocalsForFunction args
-                             , block_name = "<lambda>"}
-  compile body
-  emitCodeNoArg RETURN_VALUE
-  assemble
-  compiledBody <- makeObject args
-  modify $ \s -> s { cBlock = oldState }
-  compileClosure (PyString { string="<lambda>" }) compiledBody args
+  -- lambdas can have free variables.
+  compBody <- nestedBlock $
+              (do modifyBlockState $
+                    \s -> s { block_varnames = computeLocalsForFunction args
+                            , block_name = "<lambda>" }
+                  compile body
+                  emitCodeNoArg RETURN_VALUE
+                  assemble
+                  makeObject args)
+  compileClosure (PyString { string = "<lambda>" }) compBody args
 
-compile (SpecialForm Hook exps) =
-  compile $ handleTrain exps
-  
+-- from now on, that's basically desugaring.
 compile (SpecialForm Compose funcs) = do
   -- SpecialForm Compose [f1, f2, f3, ...] =
   --    = \x -> f1(f2(f3(...(x))));
   compile (Lambda ["x"] (foldr1 (\x y -> FunApp x [y]) (funcs ++ [Var "x"])))
 
+compile (SpecialForm Hook exps) =
+  compile $ handleTrain exps
+  
 handleTrain :: [Term] -> Term
 handleTrain exps =
   if (length exps `rem` 2) == 0 then
@@ -402,6 +409,7 @@ handleTrain exps =
     handleFork exps
 
 handleHook :: [Term] -> Term
+handleHook [] = error "DOMAIN ERROR"
 handleHook (f:[g]) = 
   (Lambda ["x"] (FunApp f [Var "x", FunApp g [Var "x"]]))
 handleHook (f:gs) =
@@ -428,8 +436,7 @@ createFunction fname args isPrime = do
   return fId
 
 makeObject :: [Identifier] -> CompilerState PyType
-makeObject fargs =
-  do
+makeObject fargs = do
   instr <- getBlockState block_instructions
   cnst <- getBlockState block_constants
   vnames <- getBlockState block_varnames
@@ -582,14 +589,3 @@ searchFunction :: Identifier -> CompilerState (Maybe Function)
 searchFunction k = do
   fns <- getBlockState block_functions
   return $ Map.lookup k fns
-
-compileAnonFunction :: Term -> Term -> CompilerState ()
-compileAnonFunction f1 f2 = do
-  compBody <- nestedBlock $
-              (do modifyBlockState $
-                    \s -> s { block_varnames = computeLocalsForFunction ["x"] }
-                  compile (FunApp f1 [(Var "x"), (FunApp f2 [Var "x"])])
-                  emitCodeNoArg RETURN_VALUE
-                  assemble
-                  makeObject ["x"])
-  compileClosure (PyString { string="lambda" }) compBody ["x"]

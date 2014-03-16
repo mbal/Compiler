@@ -1,9 +1,7 @@
 module Parser where
-import Control.Monad
 import Text.ParserCombinators.Parsec.Language
 import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Expr
-import Text.Parsec.Prim (manyAccum)
 import Control.Applicative ((<*))
 import qualified Text.ParserCombinators.Parsec.Token as Token
 
