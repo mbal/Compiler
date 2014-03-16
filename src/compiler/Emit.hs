@@ -176,7 +176,7 @@ writeCodeObj obj =
      writeTuple []
      writeTuple []
      writeString PyString { string = "file" }
-     writeString PyString { string = "<main>" }
+     writeString $ name obj
      writeU32 1 -- first line of code ??
      writeString PyString { string = "bb" } -- lnotab ??
 
