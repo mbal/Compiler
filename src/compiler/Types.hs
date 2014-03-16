@@ -44,10 +44,14 @@ type VarSet = Set.Set Identifier
 emptyVarSet :: Set.Set a
 emptyVarSet = Set.empty
 
+data Result = Yes | No | Unk
+            deriving (Show, Eq)
+
 data Definition = FunDcl { numArgs :: Int
                          , vtype :: VarType
 --                         , dname :: String
-                         , isPrime :: Bool }
+                         , isPrime :: Bool
+                         , higherOrder :: Result}
                   | VarDcl {  }
                   deriving (Show)
 
