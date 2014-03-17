@@ -4,15 +4,17 @@
 
 module Compiler where
 import Control.Monad.Reader
-import Control.Monad.State (MonadState, State, put, get, gets, modify)
-import Control.Applicative (Applicative)
+import Control.Monad.State (modify)
 import Data.Word (Word16)
 import Data.Char
+import Data.Maybe (mapMaybe)
+import Data.List ((\\), union)
 import qualified Data.Map as Map
 
 import Parser (Term(..), BOperation(..), UOperation(..), Identifier,
                Value(..), SFKind(..))
 import Bytecode
+import Assemble
 import Emit
 import Types
 
@@ -30,6 +32,7 @@ initBlock = CodeBlock {
   , block_cellvars = Map.empty
   , block_name = ""
   , block_labelMap = Map.empty
+  , block_flags = 0
   , block_instructionOffset = 0
   , block_labelsForNextInstruction = []
   , block_nextNameID = 0
@@ -45,9 +48,6 @@ initState = CState {
   , cFilename = "out"
   , cDefinitions = Map.empty
   }
-
-newtype CompilerState a = CompilerState { runCompilerState :: State CState a }
-    deriving (Functor, Applicative, Monad, MonadState CState)
 
 -- emits opCode with the given argument
 emitCodeArg :: OpCode -> Word16 -> CompilerState ()
@@ -83,19 +83,6 @@ freshConstantId = do
   cId <- getBlockState block_nextConstantID
   modifyBlockState $ \s -> s { block_nextConstantID = cId + 1 }
   return cId
-
-modifyBlockState :: (CodeBlock -> CodeBlock) -> CompilerState ()
-modifyBlockState f = do
-  state <- getBlockState id
-  setBlockState $ f state
-
-getBlockState :: (CodeBlock -> a) -> CompilerState a
-getBlockState f = gets (f . cBlock)
-
-setBlockState :: CodeBlock -> CompilerState ()
-setBlockState newState = do
-  oldState <- get
-  put $ oldState { cBlock = newState }
 
 newLabel :: CompilerState LabelID
 newLabel = do
@@ -169,44 +156,6 @@ nestedBlock computation = do
   return result
 
 {-- ============= STATE ============= --}
-
-
-{-- =========== ASSEMBLE ============ --}
--- main purpose of this function is to fix jump targets
-assemble :: CompilerState ()
-assemble = do
-  lblMap <- getBlockState block_labelMap
-  code <- fmap reverse (getBlockState block_instructions)
-  let annotatedCode = fixJumpTarget lblMap code
-  modifyBlockState $ \s -> s { block_instructions = annotatedCode }
-
-fixJumpTarget :: Map.Map LabelID Word16 -> [AugInstruction] -> [AugInstruction]
-fixJumpTarget labelMap code =
-  -- walk over the code, if an instruction is a jump, look it up in the
-  -- label map, compute the offset (if relative) and fix the target
-  map (\x -> fixJump labelMap x) code
-
-fixJump :: Map.Map LabelID Word16 -> AugInstruction -> AugInstruction
-fixJump mp augInstr@(AugInstruction (Instruction opcode arg) index) =
-  if isJump opcode then
-    case arg of
-      Just x ->
-        let jmpTarget = Map.lookup x mp
-            newArg = case jmpTarget of
-              Just k -> computeTarget k index (instr augInstr)
-              Nothing -> error "shouldn't happen"
-            in augInstr { instr = (Instruction opcode (Just newArg)) }
-      Nothing -> error $ "shouldn't happen"
-  else augInstr
-
-computeTarget :: Word16 -> Word16 -> Instruction -> Word16
-computeTarget target instrIndex instr@(Instruction opcode _) =
-  if isRelativeJump opcode then
-    (target - (instrIndex + (fromIntegral $ instructionSize instr)))
-  else
-    target
-
-{-- =========== ASSEMBLE ============ --}
 
 compileTopLevel :: [Term] -> CompilerState ()
 compileTopLevel xs =
@@ -384,12 +333,14 @@ compile (Defun fname fargs body) = do
   vId <- createFunction fname (length fargs) False
   emitCodeArg STORE_NAME vId
 
-compile (Lambda args body) = do
+
+compile expr@(Lambda args body) = do
   -- lambdas can have free variables.
   compBody <- nestedBlock $
-              (do modifyBlockState $
+              (do enterScope "<lambda>" expr
+                  {-modifyBlockState $
                     \s -> s { block_varnames = computeLocalsForFunction args
-                            , block_name = "<lambda>" }
+                            , block_name = "<lambda>" } -}
                   compile body
                   emitCodeNoArg RETURN_VALUE
                   assemble
@@ -449,15 +400,20 @@ makeObject fargs = do
   let locals = Map.union vnames fnames
   bnames <- getBlockState block_names
   bname <- getBlockState block_name
+  freevars <- getBlockState block_freevars
+  cellvars <- getBlockState block_cellvars
+  flags <- getBlockState block_flags
   let obj = PyCode {
                    argcount = fromIntegral (length fargs)
                    , nlocals = fromIntegral (length $ Map.toList locals)
                    , stackSize = 100
-                   , flags = 0x43
+                   , flags = flags
                    , code = PyString $ map (chr . fromIntegral)
                             (concat (map encodeInstruction' instr))
                    , consts = PyTuple $ reverse cnst
                    , varnames = PyTuple $ map PyString (keysOrdered locals)
+                   , freevars = PyTuple $ map PyString (keysOrdered freevars)
+                   , cellvars = PyTuple $ map PyString (keysOrdered cellvars)
                    , names = PyTuple $ map PyString (keysOrdered bnames)
                    , name = PyString bname
                    }
@@ -468,10 +424,33 @@ emitWriteVar fname = do
   cId <- createConstant fname
   emitCodeArg STORE_NAME cId
 
+-- TODO: flags change when f is a closure.
+-- Here, we do "the other way round", with respect to cpython:
+-- we first compile, then compute the cellvars for the parent.
 compileClosure :: PyType -> PyType -> [Identifier] -> CompilerState ()
-compileClosure name cbody args =
-  do compileConstantEmit cbody
-     emitCodeArg MAKE_FUNCTION 0
+compileClosure nm cbody args = do
+  let numFreeVars = length (elements $ freevars cbody) 
+  if (numFreeVars == 0) then
+    do compileConstantEmit cbody
+       emitCodeArg MAKE_FUNCTION 0
+    else
+    do let fv = elements $ freevars cbody
+       {-forM_ fv $ \var -> do
+         maybeVarInfo <- lookupClosureVar var
+         case maybeVarInfo of
+           Just (CellVar i) -> emitCodeArg LOAD_CLOSURE index
+           Just (FreeVar i) -> emitCodeArg LOAD_CLOSURE index
+           _ -> error $ "closure variable " ++ fv ++ " in " ++ name ++
+                "is not a cell variable in enclosing scope"
+       emitCodeArg BUILD_TUPLE $ fromIntegral numFreeVars
+       compileConstantEmit cbody
+       emitCodeArg MAKE_CLOSURE 0 -}
+       modifyBlockState $
+         \s -> s { block_cellvars = Map.fromList $ zip (map string fv) [0..] }
+       mapM_ (\(x,y) -> (emitCodeArg LOAD_CLOSURE y)) (zip fv [0..])
+       emitCodeArg BUILD_TUPLE (fromIntegral $ (length fv))
+       compileConstantEmit cbody
+       emitCodeArg MAKE_CLOSURE 0
 
 compileConstantEmit :: PyType -> CompilerState ()
 compileConstantEmit obj =
@@ -482,8 +461,6 @@ computeLocalsForFunction :: [Identifier] -> Map.Map Identifier Word16
 computeLocalsForFunction formalParameters =
   Map.fromList (zip formalParameters [0.. ])
 
--- XXX: that's not really true, it also depends on the context (i.e.
--- function, class, module, ...)
 emitReadVar :: VarType -> Word16 -> CompilerState ()
 emitReadVar typ index =
   case typ of
@@ -501,7 +478,11 @@ searchVariable varName = do
       globals <- getBlockState block_names
       case Map.lookup varName globals of
         Just y -> return $ Just (Global, y)
-        Nothing -> return Nothing
+        Nothing -> do
+          freevars <- getBlockState block_freevars
+          case Map.lookup varName freevars of
+            Just y -> return $ Just (Deref, y)
+            Nothing -> return Nothing
 
 createGlobalVariable :: Identifier -> CompilerState VariableID
 createGlobalVariable name = do
@@ -593,3 +574,19 @@ searchFunction :: Identifier -> CompilerState (Maybe Function)
 searchFunction k = do
   fns <- getBlockState block_functions
   return $ Map.lookup k fns
+
+enterScope name expr@(Lambda args body) = do
+  modifyBlockState $
+    \s -> s {
+      block_varnames = computeLocalsForFunction args
+      , block_freevars = Map.fromList (zip (freeVariables expr) [0..])
+      , block_name = name
+      }
+
+freeVariables (Defun _ args body) = freeVariables body \\ args
+freeVariables (Lambda args body) = freeVariables body \\ args
+freeVariables (Var k) = [k]
+freeVariables (BinaryOp _ e1 e2) = union (freeVariables e1) (freeVariables e2)
+freeVariables (UnaryOp _ e) = freeVariables e
+freeVariables (FunApp _ args) =
+  mapMaybe (\k -> case k of Var x -> Just x; _ -> Nothing) args
