@@ -168,13 +168,13 @@ writeCodeObj obj =
      writeU32 $ argcount obj
      writeU32 $ nlocals obj
      writeU32 $ stackSize obj
-     writeU32 $ 0x43
+     writeU32 $ flags obj
      writeString $ code obj
      writeObject $ consts obj
      writeObject $ names obj
      writeObject $ varnames obj
-     writeTuple []
-     writeTuple []
+     writeObject $ freevars obj
+     writeObject $ cellvars obj
      writeString PyString { string = "file" }
      writeString $ name obj
      writeU32 1 -- first line of code ??
@@ -246,12 +246,13 @@ writeConst (PyString k) = do
 writeConst (PyCode {..}) = do
   writeU8 $ encodeType CODE
   mapM_ writeU32 [argcount, nlocals, stackSize, flags]
-  mapM_ writeObject [code, consts, names, varnames, PyTuple [],
-                     PyTuple [], PyString "fname", name ]
+  mapM_ writeObject [code, consts, names, varnames, freevars,
+                     cellvars, PyString "fname", name ]
   writeU32 1
   writeString $ PyString { string = "a" }
 
--- XXX: TODO.
+-- XXX: TODO. We should clean up this, and generally reorganized the code
+-- since many functions actually could be rewritten as writeTuple
 writeConst (PyTuple _) = undefined
 
 instructionSize :: Instruction -> Word32

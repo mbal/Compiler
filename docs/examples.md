@@ -165,3 +165,12 @@ A train is a sequence of functions, separated by `,`. There are 3 trains:
   `{f1, f2, ... fk}` is the hook between `f1` and `{f2, ... fk}`
   If there is an odd number:
   `{f1, f2, ... fk}` is the fork: `{f1, f2, {f3, ... fk}}`.
+
+Among these three, the most useful (and clearer) is the fork, since it
+mirrors the reading order. `({sum, div, len})(x)` has two natural
+interpretations, in my opinion:
+1. is the sum of x divided by the length of x. This is the most
+   natural, but some would argue for the next one;
+2. the sum of the division of the length of x. In most cases, this
+   second interpretation is ugly, since the second function (i.e.
+   `div`) is a dyad.
